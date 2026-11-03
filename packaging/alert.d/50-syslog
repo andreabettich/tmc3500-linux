@@ -1,0 +1,12 @@
+#!/bin/sh
+# tmc3500 alert hook: log every event to syslog/journald with logger(1).
+# Input: one JSON event on stdin. Environment: TMC3500_EVENT, TMC3500_EVENT_KEY, TMC3500_SEVERITY.
+set -u
+json=$(head -c 65536)
+case "${TMC3500_SEVERITY:-info}" in
+    error) prio=user.err ;;
+    warning) prio=user.warning ;;
+    *) prio=user.info ;;
+esac
+event=$(printf '%s' "${TMC3500_EVENT:-unknown}" | tr -cd 'a-z0-9:._-')
+exec "${LOGGER:-logger}" -t tmc3500 -p "$prio" -- "$event: $json"

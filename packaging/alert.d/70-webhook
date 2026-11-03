@@ -1,0 +1,20 @@
+#!/bin/sh
+# tmc3500 alert hook: POST the JSON event to a webhook with curl.
+# Disabled unless WEBHOOK_URL is set in /etc/tmc3500/alert.env (KEY=value lines; not sourced):
+#   WEBHOOK_URL=https://hooks.example.com/tmc3500
+# Under the hardened tmc3500-monitor unit, allow the endpoint in the IPAddressAllow drop-in.
+set -u
+env_file=${TMC3500_ALERT_ENV:-/etc/tmc3500/alert.env}
+WEBHOOK_URL=
+if [ -r "$env_file" ]; then
+    while IFS='=' read -r k v; do
+        [ "$k" = WEBHOOK_URL ] && WEBHOOK_URL=$v
+    done < "$env_file"
+fi
+[ -n "$WEBHOOK_URL" ] || exit 0
+case "$WEBHOOK_URL" in
+    https://*|http://*) ;;
+    *) echo "70-webhook: WEBHOOK_URL must be http(s)" >&2; exit 1 ;;
+esac
+head -c 65536 | exec "${CURL:-curl}" -fsS --max-time 8 --proto '=https,http' \
+    -H 'Content-Type: application/json' --data-binary @- -- "$WEBHOOK_URL"
