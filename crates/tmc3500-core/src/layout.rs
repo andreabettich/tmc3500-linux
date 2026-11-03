@@ -97,6 +97,8 @@ pub fn transform(page: &InkPage, cfg: &JobConfig) -> InkPage {
 
 /// Media saving: returns the (possibly shifted) page and the shortened page length, if any.
 pub fn media_saving(page: InkPage, cfg: &JobConfig) -> (InkPage, Option<u32>) {
+    // with borderless off the content starts BORDER_ROWS down and needs BORDER_ROWS below it
+    let margins = if cfg.borderless { 0 } else { 2 * BORDER_ROWS };
     let Some((first, last)) = page.inked_rows() else {
         return match cfg.saving {
             MediaSaving::None => (page, None),
@@ -105,7 +107,7 @@ pub fn media_saving(page: InkPage, cfg: &JobConfig) -> (InkPage, Option<u32>) {
     };
     match cfg.saving {
         MediaSaving::None => (page, None),
-        MediaSaving::Lower => (page, Some((last + 1).max(MIN_SAVED_LENGTH))),
+        MediaSaving::Lower => (page, Some((last + 1 + margins).max(MIN_SAVED_LENGTH))),
         MediaSaving::LowerUpper => {
             let mut out = InkPage::new(page.width(), page.height()).expect("same size as input");
             for y in first..=last {
@@ -118,7 +120,10 @@ pub fn media_saving(page: InkPage, cfg: &JobConfig) -> (InkPage, Option<u32>) {
                     }
                 }
             }
-            (out, Some((last - first + 1).max(MIN_SAVED_LENGTH)))
+            (
+                out,
+                Some((last - first + 1 + margins).max(MIN_SAVED_LENGTH)),
+            )
         }
     }
 }
@@ -217,6 +222,23 @@ mod tests {
         let c = cfg("TmQuality=Quality1 TmPosAdjH=0.50in");
         let a = print_area(&c);
         assert_eq!(extent(&transform(&rect(&a, 180, 90, 900, 180), &c)).0, 540);
+    }
+
+    #[test]
+    fn media_saving_with_borderless_off_keeps_the_bottom_margin() {
+        // content is printed 21 rows lower and needs 21 rows below it
+        let base = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmBorderless=False";
+        let c = cfg(&format!("{base} TmMediaSaving=Lower"));
+        let a = print_area(&c);
+        assert_eq!(
+            media_saving(rect(&a, 0, 100, 10, 400), &c).1,
+            Some(400 + 2 * BORDER_ROWS)
+        );
+        let c = cfg(&format!("{base} TmMediaSaving=LowerUpper"));
+        assert_eq!(
+            media_saving(rect(&a, 0, 100, 10, 400), &c).1,
+            Some(300 + 2 * BORDER_ROWS)
+        );
     }
 
     #[test]
