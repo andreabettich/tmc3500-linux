@@ -94,6 +94,50 @@ impl Stride {
     }
 }
 
+/// Quality2: y of the pass that prints row r at column x. Same-phase passes covering r (at most 3,
+/// ascending y) share it with triangular weights over their nozzle span.
+fn q2_owner(r: i64, x: u32) -> Option<i64> {
+    let ph = (x % 2) as usize;
+    let span = 2 * i64::from(Q2_LINES);
+    let weight = |y: i64| {
+        let top = y - NOZZLE_LEAD;
+        if r < top || r >= top + span {
+            0
+        } else {
+            (r - top + 1).min(top + span - r)
+        }
+    };
+    let mut cand = [(0i64, 0i64); 4];
+    let mut n = 0;
+    if ph == 0 && weight(0) > 0 {
+        cand[n] = (0, weight(0));
+        n += 1;
+    }
+    let f = Q2_FIRST[ph];
+    let k_hi = (r - f + NOZZLE_LEAD).div_euclid(Q2_STEP);
+    let k_lo = (r - f + NOZZLE_LEAD - span + 1).div_euclid(Q2_STEP).max(0);
+    for k in k_lo.max(0)..=k_hi {
+        let y = f + k * Q2_STEP;
+        let w = weight(y);
+        if w > 0 && n < cand.len() {
+            cand[n] = (y, w);
+            n += 1;
+        }
+    }
+    let total: i64 = cand[..n].iter().map(|&(_, w)| w).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut t = i64::from(hash(x, r)) * total / 1024;
+    for &(y, w) in &cand[..n] {
+        if t < w {
+            return Some(y);
+        }
+        t -= w;
+    }
+    None
+}
+
 struct Plan {
     mode: WeaveMode,
     passes: Vec<Pass>,
@@ -161,41 +205,7 @@ impl Plan {
                 ph == pass.phase
                     && SPEED.owner(first, r, x).map(|p| SPEED.y(first, p)) == Some(pass.y)
             }
-            WeaveMode::Quality2 => {
-                let ph = x % 2;
-                if ph != pass.phase {
-                    return false;
-                }
-                // triangular weights over the nozzle span of every same-phase pass covering r
-                let span = 2 * i64::from(Q2_LINES);
-                let weight = |p: &Pass| {
-                    let top = p.y - NOZZLE_LEAD;
-                    if r < top || r >= top + span {
-                        0
-                    } else {
-                        (r - top + 1).min(top + span - r)
-                    }
-                };
-                let covering: Vec<(i64, i64)> = self
-                    .passes
-                    .iter()
-                    .filter(|p| p.phase == ph)
-                    .map(|p| (p.y, weight(p)))
-                    .filter(|&(_, w)| w > 0)
-                    .collect();
-                let total: i64 = covering.iter().map(|&(_, w)| w).sum();
-                if total == 0 {
-                    return false;
-                }
-                let mut t = i64::from(hash(x, r)) * total / 1024;
-                for (y, w) in covering {
-                    if t < w {
-                        return y == pass.y;
-                    }
-                    t -= w;
-                }
-                false
-            }
+            WeaveMode::Quality2 => x % 2 == pass.phase && q2_owner(r, x) == Some(pass.y),
         }
     }
 }
@@ -354,6 +364,60 @@ mod tests {
             }
         }
         p
+    }
+
+    /// The original per-dot implementation of the Quality2 owner (walks every pass), kept as the
+    /// oracle for the O(1) version.
+    fn reference_q2_prints(plan: &Plan, pi: usize, r: i64, x: u32) -> bool {
+        let pass = plan.passes[pi];
+        let ph = x % 2;
+        if ph != pass.phase {
+            return false;
+        }
+        let span = 2 * i64::from(Q2_LINES);
+        let weight = |p: &Pass| {
+            let top = p.y - NOZZLE_LEAD;
+            if r < top || r >= top + span {
+                0
+            } else {
+                (r - top + 1).min(top + span - r)
+            }
+        };
+        let covering: Vec<(i64, i64)> = plan
+            .passes
+            .iter()
+            .filter(|p| p.phase == ph)
+            .map(|p| (p.y, weight(p)))
+            .filter(|&(_, w)| w > 0)
+            .collect();
+        let total: i64 = covering.iter().map(|&(_, w)| w).sum();
+        if total == 0 {
+            return false;
+        }
+        let mut t = i64::from(hash(x, r)) * total / 1024;
+        for (y, w) in covering {
+            if t < w {
+                return y == pass.y;
+            }
+            t -= w;
+        }
+        false
+    }
+
+    #[test]
+    fn quality2_owner_matches_reference() {
+        let plan = Plan::new(WeaveMode::Quality2, 3000);
+        for r in (0..3000).step_by(3) {
+            for x in 0..40 {
+                for pi in 0..plan.passes.len() {
+                    assert_eq!(
+                        plan.prints(pi, r, x),
+                        reference_q2_prints(&plan, pi, r, x),
+                        "r={r} x={x} pass={pi}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
