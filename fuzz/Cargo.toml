@@ -1,0 +1,40 @@
+[package]
+name = "tmc3500-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tmc3500-core = { path = "../crates/tmc3500-core" }
+
+[[bin]]
+name = "cupsraster"
+path = "fuzz_targets/cupsraster.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "options"
+path = "fuzz_targets/options.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "colour_table"
+path = "fuzz_targets/colour_table.rs"
+test = false
+doc = false
+bench = false

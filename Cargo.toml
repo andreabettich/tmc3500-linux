@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["fuzz"]
 members = ["crates/tmc3500-core", "crates/rastertotmc3500", "crates/xtask"]
 
 [workspace.package]
