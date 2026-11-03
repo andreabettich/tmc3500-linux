@@ -111,15 +111,23 @@ tmc3500ctl [--json] [--config <path>] <command>
 
 | command | does |
 |---|---|
-| `status [--printer <host>]` | state, CUPS reasons, raw SNMP error bits, supplies |
-| `ink [--printer <host>]` | supplies only |
-| `counters [--printer <host>]` | `sysDescr`, uptime, life count, power-on count |
-| `setup --printer <host> [--queue Q] [--ppd P] [--apply]` | writes `[printer] host` to the config; prints the `lpadmin` command, or with `--apply` runs it, sets `printer-error-policy=stop-printer` and (re)starts the monitor |
-| `release-held-jobs [--queue Q] [--dry-run] [--job ID]... [--yes]` | lists held jobs with the reprint warning; releases the jobs named with `--job` (or all with `--yes`) and removes their partial-send markers |
+| `status [--queue Q \| --all \| --printer <host>]` | state, CUPS reasons, raw SNMP error bits, supplies |
+| `ink [--queue Q \| --all \| --printer <host>]` | supplies only |
+| `counters [--queue Q \| --all \| --printer <host>]` | `sysDescr`, uptime, life count, power-on count |
+| `setup --printer <host> [--queue Q] [--ppd P] [--apply]` | records the printer for queue Q in the config (adds it, or updates the queue's address); prints the `lpadmin` command, or with `--apply` runs it, sets `printer-error-policy=stop-printer` and (re)starts the monitor |
+| `release-held-jobs [--queue Q] [--dry-run] [--job ID]... [--yes]` | lists held jobs on Q (default: every configured queue) with the reprint warning; releases the jobs named with `--job` (a full ID or a bare job number) or all with `--yes`, and removes their partial-send markers |
 | `nozzle-check`, `clean` | **disabled**: always exit 3 (§9) |
 
-`--printer` defaults to `[printer] host` from the config, and `--queue` defaults to `[printer] queue`
-(`TM-C3500`).
+**Which printers** `status`, `ink` and `counters` report:
+
+| arguments | printers | JSON |
+|---|---|---|
+| none, one printer configured | that printer | one object (below) |
+| none, several configured, or `--all` | all of them, queried in parallel | `{"printers": [object, ...]}`; exit 2 if any is unreachable |
+| `--queue Q` | the printer of queue Q (exit 1 if Q isn't configured) | one object |
+| `--printer <host>` | that address, configured or not | one object |
+
+`setup` without `--queue` uses `[printer] queue` (`TM-C3500`).
 
 **Exit codes:** 0 success; 1 error (config, usage, CUPS tool failure); 2 printer unreachable (clap
 also uses 2 for usage errors); 3 maintenance command disabled.
@@ -129,6 +137,7 @@ also uses 2 for usage errors); 3 maintenance command disabled.
 ```jsonc
 // tmc3500ctl --json status
 {
+  "queue": "TM-C3500",
   "printer": "192.0.2.50",
   "reachable": true,
   "sys_descr": "EPSON TM-C3500",          // null if not reported
@@ -149,22 +158,26 @@ also uses 2 for usage errors); 3 maintenance command disabled.
 }
 
 // tmc3500ctl --json ink
-{ "printer": "...", "reachable": true, "supplies": [ ... as above ... ] }
+{ "queue": "...", "printer": "...", "reachable": true, "supplies": [ ... as above ... ] }
 
 // tmc3500ctl --json counters
-{ "printer": "...", "reachable": true, "sys_descr": "...", "uptime_seconds": 86400,
+{ "queue": "...", "printer": "...", "reachable": true, "sys_descr": "...", "uptime_seconds": 86400,
   "life_count": 12345, "power_on_count": 42 }            // each null if not reported
 
 // any failure (exit code 1, 2 or 3)
-{ "ok": false, "error": "...", ... }                     // unreachable adds "printer", "reachable": false;
+{ "ok": false, "error": "...", ... }                     // unreachable adds "queue", "printer", "reachable": false;
                                                          // disabled maintenance adds "command"
 
+// several printers (one unreachable: exit code 2)
+{ "printers": [ { "queue": "TM-C3500-1", "printer": "192.0.2.51", "reachable": true, ... },
+                { "queue": "TM-C3500-2", "printer": "192.0.2.52", "reachable": false, "error": "..." } ] }
+
 // tmc3500ctl --json setup --printer 192.0.2.50 --apply
-{ "ok": true, "printer": "192.0.2.50", "config": "/etc/tmc3500/tmc3500.toml",
+{ "ok": true, "queue": "TM-C3500", "printer": "192.0.2.50", "config": "/etc/tmc3500/tmc3500.toml",
   "uri": "tmc3500://192.0.2.50", "command": ["lpadmin", "-p", "TM-C3500", ...], "applied": true }
 
 // tmc3500ctl --json release-held-jobs --job 42
-{ "ok": true, "queue": "TM-C3500", "dry_run": false, "held": [...], "released": [...],
+{ "ok": true, "queue": "TM-C3500", "queues": ["TM-C3500"], "dry_run": false, "held": [...], "released": [...],
   "failed": [{ "id": "...", "error": "..." }], "warning": "Warning: a released job prints again ...",
   "warnings": [] }
 ```
@@ -177,8 +190,10 @@ known yet (§9).
 Every executable in `[alerts] dir` (default `/etc/tmc3500/alert.d/`) receives each event as one JSON
 object on stdin. Hooks must be owned by root (or the running user) and not group- or world-writable.
 Symlinks are skipped. Each hook gets `hook_timeout_ms`. Hook failures are logged and never affect
-printing. An event with the same `key` is not sent again within `repeat_interval_s`. The backend and
-the monitor share the suppression state, so an incident is reported once.
+printing. An event with the same `key` for the same printer is not sent again within
+`repeat_interval_s`; the same problem on another printer is reported separately. The backend and the
+monitor share the suppression state and both name the printer by its address, so an incident is
+reported once.
 
 ```json
 {
@@ -186,6 +201,7 @@ the monitor share the suppression state, so an incident is reported once.
   "key": "ink-low:cyan",
   "severity": "warning",
   "printer": "192.0.2.50",
+  "queue": "TM-C3500",
   "message": "cyan ink low (8% left)",
   "time": "2026-11-03T10:15:00Z",
   "timestamp": 1793700900,
@@ -195,7 +211,8 @@ the monitor share the suppression state, so an incident is reported once.
 }
 ```
 
-`job_id` is present on events from the backend (the job being printed). `source` is `backend` or
+`queue` is the printer's CUPS queue (omitted if unknown). `job_id` is present on events from the
+backend (the job being printed). `source` is `backend` or
 `monitor`. Conditions are re-sent only after `repeat_interval_s`. When a condition clears, its key is
 reset, so it alerts again at once if it comes back.
 
@@ -219,8 +236,8 @@ The mail and webhook hooks are configured in `/etc/tmc3500/alert.env`.
 ## 6. Prometheus metrics
 
 `tmc3500-monitor` rewrites `[monitor] textfile` (default
-`/var/lib/prometheus/node-exporter/tmc3500.prom`) after every poll. Every series has the label
-`printer="<host>"`.
+`/var/lib/prometheus/node-exporter/tmc3500.prom`) after every poll, with every configured printer in
+one file. Every series has the labels `printer="<host>"` and `queue="<CUPS queue>"`.
 
 | metric | type | value |
 |---|---|---|
@@ -239,7 +256,10 @@ The mail and webhook hooks are configured in `/etc/tmc3500/alert.env`.
 backend, the monitor and the ctl. Every key is optional, and unknown keys are an error. The
 installed file documents every key with its default. Sections:
 
-- `[printer]`: `host`, `port`, `queue`;
+- `[printer]`: `host`, `port`, `queue`: a single printer;
+- `[[printers]]`: further printers, one table each with `queue`, `host` and optional `snmp_port`
+  (at most 64; every queue at most once across `[printer]` and `[[printers]]`). `tmc3500ctl setup`
+  maintains both;
 - `[snmp]`: `enabled`, `port`, `community`, `version` (`1`/`2c`), `timeout_ms`, `retries`;
 - `[backend]`: `connect_timeout_ms`, `io_timeout_ms`, `status_interval_ms`, `retry_initial_ms`,
   `retry_max_ms`, `unreachable_hold_after_ms` (10 min), `stall_timeout_ms` (5 min),

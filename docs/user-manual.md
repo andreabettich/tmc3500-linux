@@ -2,7 +2,8 @@
 
 For people who design and print labels on the Epson TM-C3500 from a Linux computer. You don't need to
 know Linux administration. Whoever set up the printer (your administrator) has installed the driver
-and created the printer queue, usually called **TM-C3500**.
+and created the printer queue, usually called **TM-C3500**. With several printers, each has its own
+queue (for example TM-C3500-1, TM-C3500-2): pick the one of the printer you are standing at.
 
 This driver is unofficial: it is not made or supported by Epson. It produces the same printer output
 as Epson's Windows driver, so settings you know from Windows work the same way here. For loading
