@@ -3,5 +3,6 @@
 
 pub mod cupsopts;
 pub mod error;
+pub mod geometry;
 pub mod options;
 pub mod units;
