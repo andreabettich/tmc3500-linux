@@ -342,3 +342,17 @@ fn release_reports_lp_failures() {
         .unwrap()
         .contains("Forbidden"));
 }
+
+#[test]
+fn setup_keeps_the_config_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = H::new();
+    std::fs::write(h.cfg(), "[snmp]\ncommunity = \"s3cret\"\n").unwrap();
+    std::fs::set_permissions(h.cfg(), std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert_eq!(
+        h.run(&["setup", "--printer", "192.0.2.7"]).status.code(),
+        Some(0)
+    );
+    let m = std::fs::metadata(h.cfg()).unwrap().permissions().mode();
+    assert_eq!(m & 0o777, 0o640);
+}
