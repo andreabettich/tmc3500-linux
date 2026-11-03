@@ -49,6 +49,8 @@ state_dir = "/var/lib/tmc3500"
 interval_ms = 30000
 # Prometheus node_exporter textfile collector output.
 textfile = "/var/lib/prometheus/node-exporter/tmc3500.prom"
+# Mode of the textfile: node_exporter must be able to read it (0o640 if it shares a group).
+textfile_mode = 0o644
 
 [thresholds]
 # Ink is "low" at or below this percentage.

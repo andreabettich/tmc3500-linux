@@ -244,3 +244,29 @@ fn no_printer_configured_is_an_error() {
     assert_eq!(o.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&o.stderr).contains("setup"));
 }
+
+#[test]
+fn textfile_mode_is_configurable() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = H::new();
+    let fake = FakePrinter::start_local().unwrap();
+    let cfg = h.config(&fake);
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    std::fs::write(&cfg, format!("{text}textfile_mode = 0o640\n")).unwrap();
+    let o = Command::new(BIN)
+        .args(["--once"])
+        .env("TMC3500_CONFIG", &cfg)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let m = std::fs::metadata(h.textfile())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(m & 0o777, 0o640);
+}

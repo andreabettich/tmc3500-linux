@@ -193,6 +193,8 @@ pub struct MonitorCfg {
     /// Prometheus textfile (node_exporter textfile collector). Unset = no metrics file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub textfile: Option<PathBuf>,
+    /// Mode of the textfile (node_exporter must be able to read it).
+    pub textfile_mode: u32,
 }
 
 impl Default for MonitorCfg {
@@ -200,6 +202,7 @@ impl Default for MonitorCfg {
         MonitorCfg {
             interval_ms: 30_000,
             textfile: Some("/var/lib/prometheus/node-exporter/tmc3500.prom".into()),
+            textfile_mode: 0o644,
         }
     }
 }
@@ -341,6 +344,9 @@ impl Config {
         }
         if self.alerts.repeat_interval_s > MAX_MS / 1000 {
             return bad("alerts.repeat_interval_s too large".into());
+        }
+        if self.monitor.textfile_mode > 0o777 {
+            return bad("monitor.textfile_mode must be 0..=0o777".into());
         }
         let t = &self.thresholds_cfg;
         if t.ink_low_percent > 100 || t.waste_near_full_percent > 100 {

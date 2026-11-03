@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tmc3500_common::alert::{write_atomic, Alerter};
+use tmc3500_common::alert::{write_atomic_exact_mode, Alerter};
 use tmc3500_common::config::Config;
 use tmc3500_common::snmp::{resolve, SnmpClient};
 use tmc3500_common::time::unix_now;
@@ -122,7 +122,8 @@ fn run(a: Args) -> i32 {
         }
         if let Some(tf) = &cfg.monitor.textfile {
             let text = render_metrics(&host, &snap, &thr, unix_now());
-            if let Err(e) = write_atomic(tf, text.as_bytes()) {
+            if let Err(e) = write_atomic_exact_mode(tf, text.as_bytes(), cfg.monitor.textfile_mode)
+            {
                 log("WARNING", &format!("cannot write {}: {e}", tf.display()));
             }
         }

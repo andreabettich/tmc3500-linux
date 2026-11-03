@@ -475,13 +475,29 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 
 /// Like [`write_atomic`], with the mode used when `path` does not exist yet.
 pub fn write_atomic_mode(path: &Path, data: &[u8], new_mode: u32) -> std::io::Result<()> {
+    write_atomic_inner(path, data, new_mode, true)
+}
+
+/// Like [`write_atomic`], always with `mode` (e.g. the Prometheus textfile).
+pub fn write_atomic_exact_mode(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
+    write_atomic_inner(path, data, mode, false)
+}
+
+fn write_atomic_inner(
+    path: &Path,
+    data: &[u8],
+    new_mode: u32,
+    keep_existing: bool,
+) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".into());
-    let existing = std::fs::symlink_metadata(path).ok().filter(|m| m.is_file());
+    let existing = std::fs::symlink_metadata(path)
+        .ok()
+        .filter(|m| keep_existing && m.is_file());
     let mode = existing
         .as_ref()
         .map_or(new_mode, |m| m.permissions().mode() & 0o7777);
