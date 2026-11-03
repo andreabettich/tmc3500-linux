@@ -202,7 +202,7 @@ Still to be confirmed:
 - **Barcodes:**
   - solid areas get full coverage with no dither noise, and edges stay sharp;
   - default black is the Windows rich black, with an option for K-only black;
-  - the input resolution equals the printer resolution (360×360 Speed, 360×720 Quality), so nothing is
+  - the input resolution equals the printer resolution (360×360 Speed, 720×360 Quality: 720 across, 360 down), so nothing is
     rescaled.
 
 ## 5. Status, errors, alerts

@@ -7,7 +7,7 @@ Start with `AGENTS.md` (rules, commands, traps). See `docs/api.md` for the exter
 
 ```
 application ─PDF/image─▶ CUPS ─▶ cups-filters (Ghostscript/Poppler) ─▶ CUPS raster, RGB 8-bit
-                                                                         │ (360×360 or 360×720 dpi)
+                                                                         │ (360×360 or 720×360 dpi)
 rastertotmc3500  (filter, stdin → stdout)                                ▼
   options::JobConfig::from_cups   PPD defaults + job options → validated settings
   color::Converter                RGB → K/C/M/Y ink amounts (colour table) → drop-size split

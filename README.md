@@ -20,6 +20,7 @@ tmc3500ctl --json status
 
 | document | for |
 |---|---|
+| [docs/user-manual.md](docs/user-manual.md) | people who design and print labels: settings, barcodes, colours, what to do when something goes wrong |
 | [docs/operations.md](docs/operations.md) | administrators: install, print options, held jobs, alerts, hardening, troubleshooting |
 | [docs/api.md](docs/api.md) | integrators: every interface (options, CLI/JSON, alerts, metrics, config) and what works and what doesn't yet |
 | [docs/developer-guide.md](docs/developer-guide.md) | developers: architecture, data flow, tests, recipes for common changes |

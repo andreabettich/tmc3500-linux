@@ -60,7 +60,7 @@ make the job fail. The job log then has an `ERROR:` line naming the option. The 
 constraints, so print dialogs don't offer them. Defaults per queue: `lpadmin -p TM-C3500 -o
 TmCoating-default=Glossy`.
 
-**Input resolution:** cups-filters renders at 360×360 dpi (Speed) or 360×720 dpi (Quality). For
+**Input resolution:** cups-filters renders at 360×360 dpi (Speed) or 720×360 dpi (Quality: 720 across, 360 down). For
 sharp barcodes, send vectors or a raster at exactly that resolution.
 
 ## 2. Device URI
