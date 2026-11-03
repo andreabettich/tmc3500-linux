@@ -4,9 +4,6 @@ use crate::units::{dots_to_mm10_ceil, mm10_to_dots};
 
 /// Left/right liner edge added to the width of label forms.
 pub const EDGE_DOTS: u32 = 28;
-/// Widest paper width (108 mm). Wider label+edge widths get a left margin of two edges instead of
-/// one (spec section 3; an assumption that fits both captured cases, to confirm on the printer).
-pub const MAX_PAPER_DOTS: u32 = 1531;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Geometry {
@@ -34,12 +31,10 @@ pub fn geometry(cfg: &JobConfig) -> Geometry {
     } else {
         media_w
     };
-    // Spec section 3: wider than the widest paper → 2 edges, otherwise 1 (assumption, see const).
-    let left = if width > MAX_PAPER_DOTS {
-        2 * EDGE_DOTS
-    } else {
-        EDGE_DOTS
-    };
+    // Windows: the liner edge (label forms) plus the side margin that centres the printable width
+    // on wider media, rounded down (driver log EdgeL + SrcPapMgnL; captures 741, 742)
+    let edge = if cfg.form.is_label() { EDGE_DOTS } else { 0 };
+    let left = edge + media_w.saturating_sub(crate::layout::MAX_PRINT_WIDTH) / 2;
     let gap = match (cfg.form.is_die_cut(), cfg.media) {
         (false, _) => 0,
         (true, MediaSize::Label108x1748) => 43,
@@ -207,15 +202,25 @@ mod tests {
     }
 
     #[test]
-    fn left_margin_follows_spec_step_rule_without_dipping_below_edge() {
-        // Spec section 3: ESC(l is 56 when the width exceeds 1531 dots, otherwise 28.
+    fn left_margin_is_the_liner_edge_plus_half_the_width_beyond_the_print_width() {
+        // Windows (captures 000, 303, 330, 740, 741, 742; driver log EdgeL + SrcPapMgnL)
         for (o, left) in [
-            ("PageSize=Custom.4.10x6in", 28), // exactly 1531 dots
-            ("PageSize=Custom.4.12x6in", 56),
-            ("PageSize=Custom.4.15x6in", 56),
-            ("PageSize=Custom.4.20x6in", 56),
-            ("PageSize=Custom.4.07x6in", 28),
+            ("PageSize=Custom.4.25x6in", 28 + 28),
+            ("PageSize=Custom.4.15x6in", 28 + 9),
+            ("PageSize=Custom.4.12x6in", 28 + 4),
+            ("PageSize=Custom.4.10x6in", 28),
+            ("PageSize=Custom.2.00x6in", 28),
+            (
+                "PageSize=Custom.4.25x6in TmMediaForm=ContinuousLabel",
+                28 + 28,
+            ),
             ("PageSize=Custom.4.25x6in TmMediaForm=ContinuousPaper", 28),
+            ("PageSize=Custom.4.15x6in TmMediaForm=ContinuousPaper", 9),
+            ("PageSize=Custom.2.00x6in TmMediaForm=ContinuousPaper", 0),
+            (
+                "PageSize=Custom.2.00x6in TmMediaForm=ContinuousPaperBlackMark",
+                0,
+            ),
         ] {
             assert_eq!(g(o).left, left, "options {o:?}");
         }

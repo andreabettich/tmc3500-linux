@@ -179,7 +179,14 @@
 *DefaultTmVacuum: Auto
 *TmVacuum Auto/Automatic: ""
 *TmVacuum 9/Manual 9 (strong): ""
+*TmVacuum 8/Manual 8: ""
+*TmVacuum 7/Manual 7: ""
+*TmVacuum 6/Manual 6: ""
+*TmVacuum 5/Manual 5: ""
 *TmVacuum 4/Manual 4: ""
+*TmVacuum 3/Manual 3: ""
+*TmVacuum 2/Manual 2: ""
+*TmVacuum 1/Manual 1: ""
 *TmVacuum 0/Manual 0 (weak): ""
 *CloseUI: *TmVacuum
 

@@ -145,3 +145,21 @@ fn quality_mode2_matches_315() {
         capture("315_quality_matte_mode2")
     );
 }
+
+#[test]
+fn borderless_off_moves_the_quality1_grid_by_11() {
+    let p = page(2 * W, H - 42, &all_inks(0, 0, 1440, 720));
+    assert_eq!(
+        structure(&weave(&p, WeaveMode::Quality1, 21)),
+        capture("743_borderless_off_q1")
+    );
+}
+
+#[test]
+fn borderless_off_keeps_the_quality2_grid() {
+    let p = page(2 * W, H - 42, &all_inks(0, 0, 1440, 720));
+    assert_eq!(
+        structure(&weave(&p, WeaveMode::Quality2, 21)),
+        capture("744_borderless_off_q2")
+    );
+}

@@ -18,8 +18,8 @@ Bring:
 | A3 | same with `-o TmQuality=Quality1`, then `Quality2` | prints, no banding, same position | photo |
 | A4 | `-o TmBorderless=False` | white margin ≈ 1.5 mm top and bottom | measure |
 | A5 | continuous label, `-o TmMediaSaving=LowerUpper` | label length = content + margin; no content cut off | measure the margin under the content (we assume 0; Windows minimum 15 mm) |
-| A6 | `-o TmSkipBlank=True` with a 3-page PDF whose page 2 is blank | 2 labels | count; our rule is extrapolated from one capture |
-| A7 | `-o PageSize=Custom.4.12x6.88in` | image not shifted onto the liner | left-margin rule (spec §3, `ESC(l`) |
+| A6 | `-o TmSkipBlank=True` with a 3-page PDF whose page 2 is blank | 2 labels | count (bytes match Windows capture 745) |
+| A7 | `-o PageSize=Custom.4.15x6.88in` | image not shifted onto the liner | photo (bytes match Windows capture 741) |
 | A8 | `-o TmRotate180=True -o TmPosAdjV=2mm` | rotated, moved 2 mm in the expected direction | note direction (rotate/adjust order) |
 | A9 | `-n 3 -o Collate=True` 2-page PDF | 1,2,1,2,1,2 with cuts | |
 
@@ -53,7 +53,7 @@ Questions the pcaps must answer:
       printer accepts our id (`/etc/machine-id` hash). If it rejects it, set the Windows id.
 - [ ] Record nozzle check and head cleaning from the Windows utility (pcap) → enable
       `tmc3500ctl nozzle-check` / `clean`.
-- [ ] Vacuum slider positions 1, 2, 3, 5, 6, 7, 8 (also in the colour kit).
+- [x] Vacuum slider positions 1, 2, 3, 5, 6, 7, 8: captured in session 2, all supported.
 
 ## E. Failure handling (the hard requirements)
 

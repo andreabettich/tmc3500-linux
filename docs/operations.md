@@ -51,7 +51,7 @@ lp -d TM-C3500 -n 3 -o Collate=True -o TmAfterPrint=CutLastPage labels.pdf
 | `TmNotify` | `None`, `PageEnd`, `JobEnd` (buzzer) |
 | `TmBorderless`, `TmBandingReduction`, `TmBidirectional` | `True` / `False` |
 | `TmRotate180`, `TmSkipBlank`, `TmInkAdjust` | `False` / `True` |
-| `TmVacuum` | `Auto`, `9`, `4`, `0` (other slider positions not yet captured) |
+| `TmVacuum` | `Auto`, `0` (weak) … `9` (strong): the Windows slider positions |
 | `TmPosAdjH`, `TmPosAdjV` | any length, e.g. `0.5mm`, `-0.02in` (±4.09 in / ±44 in) |
 | `TmBlack` | `Rich` (as Windows), `KOnly` |
 | `TmColorMode` | `Preferred`, `Standard`, `Off`; `TmGamma` `2.2` / `1.8` |
