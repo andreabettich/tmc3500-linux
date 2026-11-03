@@ -575,6 +575,17 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
     let mut warnings = Vec::new();
     if !dry_run {
         for id in &targets {
+            // Remove the partial-send marker BEFORE resuming: CUPS restarts the job at once, and a
+            // marker still present would make the backend hold it again.
+            let num = id.rsplit('-').next().unwrap_or(id).to_string();
+            let state_dir = &ctx.cfg.alerts.state_dir;
+            let marker = tmc3500_common::markers::read_marker(state_dir, &num);
+            if marker.is_some() {
+                if let Err(e) = tmc3500_common::markers::remove_marker(state_dir, &num) {
+                    failed.push(json!({ "id": id, "error": format!("cannot remove the partial-send marker: {e}") }));
+                    continue;
+                }
+            }
             match run_tool(
                 "lp",
                 &["-i".into(), id.clone(), "-H".into(), "resume".into()],
@@ -583,17 +594,19 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
                     if !ctx.json {
                         println!("Released {id}");
                     }
-                    let num = id.rsplit('-').next().unwrap_or(id);
-                    if let Err(e) =
-                        tmc3500_common::markers::remove_marker(&ctx.cfg.alerts.state_dir, num)
-                    {
-                        warnings.push(format!(
-                            "cannot remove the partial-send marker of {id}: {e}; the backend will hold it again"
-                        ));
-                    }
                     released.push(id.clone());
                 }
-                Err(e) => failed.push(json!({ "id": id, "error": e })),
+                Err(e) => {
+                    // not resumed: put the marker back so the job stays protected
+                    if let Some(m) = &marker {
+                        if let Err(we) = tmc3500_common::markers::write_marker(state_dir, &num, m) {
+                            warnings.push(format!(
+                                "cannot restore the partial-send marker of {id}: {we}"
+                            ));
+                        }
+                    }
+                    failed.push(json!({ "id": id, "error": e }));
+                }
             }
         }
     }

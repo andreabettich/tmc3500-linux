@@ -384,3 +384,47 @@ fn setup_apply_enables_the_monitor() {
         "enable --now tmc3500-monitor.service"
     );
 }
+
+#[test]
+fn marker_is_removed_before_the_job_is_resumed() {
+    // CUPS restarts a resumed job immediately; if the marker still existed, the backend would hold it
+    // again (seen with a real cupsd).
+    let h = H::new();
+    lp_tools(&h);
+    let state = h.dir.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::write(
+        h.cfg(),
+        format!("[alerts]\nstate_dir = \"{}\"\n", state.display()),
+    )
+    .unwrap();
+    std::fs::write(state.join("partial-job-15"), "job 15 partially sent").unwrap();
+    h.tool(
+        "lp",
+        &format!(
+            "test -e {s}/partial-job-15 && echo present > {d}/marker.at.lp; echo \"$@\" > {d}/lp.args",
+            s = state.display(),
+            d = h.dir.path().display()
+        ),
+    );
+    let o = h.run(&["release-held-jobs", "--job", "15"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        h.file("marker.at.lp").is_none(),
+        "marker still present when lp ran"
+    );
+    // if resuming fails, the marker is put back so the job stays protected
+    std::fs::write(state.join("partial-job-15"), "job 15 partially sent").unwrap();
+    h.tool("lp", "exit 1");
+    let o = h.run(&["release-held-jobs", "--job", "15"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        std::fs::read_to_string(state.join("partial-job-15")).unwrap(),
+        "job 15 partially sent"
+    );
+}
