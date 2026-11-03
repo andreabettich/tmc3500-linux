@@ -7,6 +7,7 @@ pub mod decode;
 pub mod dither;
 pub mod error;
 pub mod geometry;
+pub mod layout;
 pub mod options;
 pub mod protocol;
 pub mod raster;
