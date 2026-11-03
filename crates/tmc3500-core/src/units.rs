@@ -9,7 +9,7 @@ pub fn mm10_to_dots(mm10: u32) -> u32 {
 
 /// 1/360 inch → 0.1 mm, rounding up (used for the REMOTE1 `SN` media block).
 pub fn dots_to_mm10_ceil(dots: u32) -> u32 {
-    let v = (u64::from(dots) * 254 + 359) / 360;
+    let v = (u64::from(dots) * 254).div_ceil(360);
     u32::try_from(v).unwrap_or(u32::MAX)
 }
 
