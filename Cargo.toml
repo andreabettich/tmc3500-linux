@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/tmc3500-core"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+
+[profile.release]
+panic = "abort"
+lto = true
