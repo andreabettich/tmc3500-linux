@@ -1,8 +1,9 @@
-//! RGB → ink amounts (K, C, M, Y; 0..=65535).
+//! RGB → ink amounts (K, C, M, Y; 0..=65535) → drop fractions.
 //!
-//! PROVISIONAL: a simple model with grey-component replacement and the Windows "rich black". Phase 3
-//! replaces the core conversion with 3-D tables fitted to Windows colour-chart captures; the option
-//! handling (gamma, brightness, ink adjustment, K-only black, colour correction off) stays here.
+//! The conversion uses a colour table fitted to Windows colour-chart captures (`Lut`, one per
+//! coating/quality/mode); without one, a provisional formula with grey-component replacement and the
+//! Windows "rich black". Brightness and the ink profile are applied on top, both calibrated against
+//! Windows captures; K-only black bypasses the table.
 use crate::options::{BlackMode, ColorMode, ColorSettings, Gamma};
 
 /// Fractions of dots (0..=65535 = 100 %) that get a small, medium and large drop.
@@ -226,17 +227,38 @@ fn weights_on(levels: &[u8], rgb: [u8; 3]) -> [(usize, f32); 4] {
     out
 }
 
-/// Converts one RGB pixel to ink amounts `[K, C, M, Y]`.
+/// Ink profile factor for a slider step (0 … −6) at an ink amount (0..=1), measured from the
+/// Windows driver (captures 404-407): about −4.7 % per step, a little less for dense ink.
+fn ink_factor(step: i8, amount: f32) -> f32 {
+    1.0 + f32::from(step) * (0.055 - 0.022 * amount)
+}
+
+/// Brightness as a tone curve on each input channel (Windows captures 408/409; validated on 724).
+fn brightness_curve(b: i8) -> [u8; 256] {
+    std::array::from_fn(|v| {
+        let x = v as f32 / 255.0;
+        let y = match b {
+            0 => x,
+            b if b > 0 => 1.0 - (1.0 - x).powf(1.0 + 0.245 * f32::from(b)),
+            b => x.powf(1.0 - 0.315 * f32::from(b)),
+        };
+        (y * 255.0).round().clamp(0.0, 255.0) as u8
+    })
+}
+
+/// Converts one RGB pixel to ink amounts and drop fractions.
 #[derive(Debug, Clone)]
 pub struct Converter {
     /// Fitted table; `None` = provisional formula.
     lut: Option<Lut>,
-    /// Input transfer curve: 8-bit value → darkness 0..=1 (0 = white).
+    /// Provisional formula: 8-bit value → darkness 0..=1 (0 = white).
     darkness: [f32; 256],
     rich_black: bool,
-    /// Multipliers for colour inks and black (ink adjustment, brightness).
-    cmy_scale: f32,
-    k_scale: f32,
+    /// Brightness tone curve applied to the input.
+    tone: [u8; 256],
+    /// Ink profile steps (0 … −6): all inks, and black again.
+    bkcmy: i8,
+    bk: i8,
 }
 
 impl Converter {
@@ -249,18 +271,19 @@ impl Converter {
         for (v, d) in darkness.iter_mut().enumerate() {
             *d = 1.0 - (v as f32 / 255.0).powf(exponent);
         }
-        let (mut cmy_scale, mut k_scale) = (1.0f32, 1.0f32);
-        if s.ink_adjust {
-            let bright = 1.0 - 0.08 * f32::from(s.brightness);
-            cmy_scale = (1.0 + 0.05 * f32::from(s.ink_bkcmy)) * bright;
-            k_scale = (1.0 + 0.05 * f32::from(s.ink_bk)) * bright;
-        }
+        // without TmInkAdjust the adjustment values are ignored, as in the Windows dialog
+        let (b, bkcmy, bk) = if s.ink_adjust {
+            (s.brightness, s.ink_bkcmy, s.ink_bk)
+        } else {
+            (0, 0, 0)
+        };
         Self {
             lut: None,
             darkness,
             rich_black: black == BlackMode::Rich,
-            cmy_scale,
-            k_scale,
+            tone: brightness_curve(b),
+            bkcmy,
+            bk,
         }
     }
 
@@ -279,20 +302,37 @@ impl Converter {
         self.lut.is_some()
     }
 
-    /// Drop-size fractions `[small, medium, large]` per ink `[K, C, M, Y]`.
-    pub fn drops(&self, rgb: [u8; 3]) -> [Drops; 4] {
-        let Some(lut) = &self.lut else {
-            return self.ink(rgb).map(amount_to_drops);
+    /// Ink amounts `[K, C, M, Y]` (65535 = every dot a large drop), after brightness and ink profile.
+    pub fn amounts(&self, rgb: [u8; 3]) -> [u16; 4] {
+        let rgb = rgb.map(|v| self.tone[usize::from(v)]);
+        let base = match &self.lut {
+            Some(lut) => lut.amounts(rgb),
+            None => self.provisional(rgb),
         };
-        let a = lut.amounts(rgb);
+        if self.bkcmy == 0 && self.bk == 0 {
+            return base;
+        }
         std::array::from_fn(|i| {
-            let scale = if i == 0 { self.k_scale } else { self.cmy_scale };
-            let amount = (f32::from(a[i]) * scale).round().clamp(0.0, 65535.0) as u16;
-            lut.split(i, amount)
+            let a = f32::from(base[i]) / 65535.0;
+            let mut f = ink_factor(self.bkcmy, a);
+            if i == 0 {
+                f *= ink_factor(self.bk, a);
+            }
+            (f32::from(base[i]) * f).round().clamp(0.0, 65535.0) as u16
         })
     }
 
-    pub fn ink(&self, rgb: [u8; 3]) -> [u16; 4] {
+    /// Drop-size fractions `[small, medium, large]` per ink `[K, C, M, Y]`.
+    pub fn drops(&self, rgb: [u8; 3]) -> [Drops; 4] {
+        let a = self.amounts(rgb);
+        match &self.lut {
+            Some(lut) => std::array::from_fn(|i| lut.split(i, a[i])),
+            None => a.map(amount_to_drops),
+        }
+    }
+
+    /// Provisional formula (no table): grey-component replacement and the Windows rich black.
+    fn provisional(&self, rgb: [u8; 3]) -> [u16; 4] {
         let [c, m, y] = rgb.map(|v| self.darkness[usize::from(v)]);
         let k = c.min(m).min(y);
         // under-colour added to the CMY of dark neutrals (Windows prints black as rich black)
@@ -301,13 +341,8 @@ impl Converter {
         } else {
             0.0
         };
-        let q = |a: f32, scale: f32| ((a * scale).clamp(0.0, 1.0) * 65535.0).round() as u16;
-        [
-            q(k, self.k_scale),
-            q(c - k + under, self.cmy_scale),
-            q(m - k + under, self.cmy_scale),
-            q(y - k + under, self.cmy_scale),
-        ]
+        let q = |a: f32| (a.clamp(0.0, 1.0) * 65535.0).round() as u16;
+        [q(k), q(c - k + under), q(m - k + under), q(y - k + under)]
     }
 }
 
@@ -324,8 +359,8 @@ mod tests {
     #[test]
     fn white_is_no_ink_and_black_is_rich_black() {
         let c = conv("");
-        assert_eq!(c.ink([255, 255, 255]), [0, 0, 0, 0]);
-        let [k, cy, m, y] = c.ink([0, 0, 0]);
+        assert_eq!(c.amounts([255, 255, 255]), [0, 0, 0, 0]);
+        let [k, cy, m, y] = c.amounts([0, 0, 0]);
         assert_eq!(k, 65535);
         assert!(cy > 20000 && m > 20000 && y > 20000, "rich black adds CMY");
     }
@@ -333,17 +368,17 @@ mod tests {
     #[test]
     fn k_only_black_has_no_colour_ink_on_neutrals() {
         let c = conv("TmBlack=KOnly");
-        assert_eq!(c.ink([0, 0, 0]), [65535, 0, 0, 0]);
-        let [k, cy, m, y] = c.ink([128, 128, 128]);
+        assert_eq!(c.amounts([0, 0, 0]), [65535, 0, 0, 0]);
+        let [k, cy, m, y] = c.amounts([128, 128, 128]);
         assert!(k > 0 && cy == 0 && m == 0 && y == 0);
     }
 
     #[test]
     fn primaries_use_their_inks() {
         let c = conv("");
-        assert_eq!(c.ink([0, 255, 255]), [0, 65535, 0, 0]);
-        assert_eq!(c.ink([255, 0, 255]), [0, 0, 65535, 0]);
-        assert_eq!(c.ink([255, 255, 0]), [0, 0, 0, 65535]);
+        assert_eq!(c.amounts([0, 255, 255]), [0, 65535, 0, 0]);
+        assert_eq!(c.amounts([255, 0, 255]), [0, 0, 65535, 0]);
+        assert_eq!(c.amounts([255, 255, 0]), [0, 0, 0, 65535]);
     }
 
     #[test]
@@ -351,7 +386,7 @@ mod tests {
         let c = conv("");
         let mut prev = 0u32;
         for v in (0..=255u8).rev() {
-            let total: u32 = c.ink([v, v, v]).iter().map(|&a| u32::from(a)).sum();
+            let total: u32 = c.amounts([v, v, v]).iter().map(|&a| u32::from(a)).sum();
             assert!(
                 total >= prev,
                 "ink must not decrease as grey darkens (v={v})"
@@ -363,24 +398,24 @@ mod tests {
     #[test]
     fn brightness_and_ink_adjust_reduce_ink() {
         let base: u32 = conv("")
-            .ink([100, 100, 100])
+            .amounts([100, 100, 100])
             .iter()
             .map(|&a| u32::from(a))
             .sum();
         let bright: u32 = conv("TmInkAdjust=True TmBrightness=2")
-            .ink([100, 100, 100])
+            .amounts([100, 100, 100])
             .iter()
             .map(|&a| u32::from(a))
             .sum();
         let less: u32 = conv("TmInkAdjust=True TmInkBkCMY=-6")
-            .ink([100, 100, 100])
+            .amounts([100, 100, 100])
             .iter()
             .map(|&a| u32::from(a))
             .sum();
         assert!(bright < base && less < base);
         // without TmInkAdjust the adjustment values are ignored, as in the Windows dialog
         let ignored: u32 = conv("TmInkBkCMY=-6")
-            .ink([100, 100, 100])
+            .amounts([100, 100, 100])
             .iter()
             .map(|&a| u32::from(a))
             .sum();
@@ -525,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn converter_uses_the_table_and_ink_adjustment_scales_it() {
+    fn converter_uses_the_table() {
         let lut = node_lut(2, |r, _, _| {
             if r == 0 {
                 [[0, 0, 65535]; 4]
@@ -534,19 +569,49 @@ mod tests {
             }
         });
         let c = JobConfig::default();
-        let conv = Converter::with_lut(&c.color, c.black, lut.clone());
-        assert_eq!(conv.drops([0, 0, 0])[1], [0, 0, 65535]);
-        // the adjustment scales the ink amount, which is then split into drop sizes again
-        let c = JobConfig::from_cups("TmInkAdjust=True TmInkBkCMY=-2", 1).unwrap();
         let conv = Converter::with_lut(&c.color, c.black, lut);
-        let got = conv.drops([0, 0, 0]);
-        let want = amount_to_drops(58982);
-        assert!(
-            got[1].iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 2),
-            "{:?}",
-            got[1]
+        assert_eq!(conv.drops([0, 0, 0])[1], [0, 0, 65535]);
+        assert_eq!(conv.drops([255, 0, 0]), [[0; 3]; 4]);
+    }
+
+    fn table_conv(opts: &str, lut: Lut) -> Converter {
+        let c = JobConfig::from_cups(opts, 1).unwrap();
+        Converter::with_lut(&c.color, c.black, lut)
+    }
+
+    #[test]
+    fn ink_profile_scales_amounts_like_windows() {
+        // Windows (captures 404-407): factor 1 + step·(0.055 − 0.022·amount); BkCMY scales all four
+        // inks, Bk scales black again
+        let lut = amount_lut(2, |_, _, _| [32768; 4]);
+        let c = table_conv("TmInkAdjust=True TmInkBkCMY=-3", lut.clone());
+        assert_eq!(c.amounts([0, 0, 0]), [28443; 4]);
+        let c = table_conv("TmInkAdjust=True TmInkK=-3", lut.clone());
+        assert_eq!(c.amounts([0, 0, 0]), [28443, 32768, 32768, 32768]);
+        let c = table_conv("TmInkAdjust=True TmInkBkCMY=-3 TmInkK=-3", lut.clone());
+        assert_eq!(c.amounts([0, 0, 0]), [24688, 28443, 28443, 28443]);
+        // the adjusted amount is split into drop sizes by the table's curve
+        assert_eq!(c.drops([0, 0, 0])[1], lut.split(1, 28443));
+        // ignored without TmInkAdjust, as in the Windows dialog
+        let c = table_conv("TmInkBkCMY=-3", lut);
+        assert_eq!(c.amounts([0, 0, 0]), [32768; 4]);
+    }
+
+    #[test]
+    fn brightness_is_a_tone_curve_on_the_input() {
+        // Windows (captures 408/409): +b → 1 − (1 − v)^(1 + 0.245·b); −b → v^(1 + 0.315·b)
+        let lut = amount_lut(9, |r, g, b| {
+            [(r * 8000) as u16, (g * 8000) as u16, (b * 8000) as u16, 0]
+        });
+        let c = table_conv("TmInkAdjust=True TmBrightness=2", lut.clone());
+        assert_eq!(c.amounts([200, 200, 200]), lut.amounts([229, 229, 229]));
+        let c = table_conv("TmInkAdjust=True TmBrightness=-2", lut.clone());
+        assert_eq!(c.amounts([200, 200, 200]), lut.amounts([172, 172, 172]));
+        assert_eq!(
+            c.amounts([255, 0, 255]),
+            lut.amounts([255, 0, 255]),
+            "ends fixed"
         );
-        assert_eq!(got[0], [0, 0, 65535], "black not adjusted");
     }
 
     #[test]
