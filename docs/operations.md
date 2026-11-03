@@ -164,7 +164,9 @@ in the source tree.
   `journalctl -k | grep tmc3500`; if clean, `sudo aa-enforce /etc/apparmor.d/tmc3500`.
 - **Updates:** an `apt` upgrade restarts `tmc3500-monitor` (if running) but not CUPS; a job in progress
   keeps running with the old backend, and the partial-job markers protect jobs interrupted by a CUPS
-  restart.
+  restart. CUPS keeps its own copy of the PPD per queue: re-run `sudo tmc3500ctl setup --printer
+  <ip> --apply` after an upgrade so new options (e.g. all vacuum positions) appear in print dialogs;
+  the queue's default options are kept.
 
 ## 8. Troubleshooting
 
