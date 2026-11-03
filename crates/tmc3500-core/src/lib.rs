@@ -8,4 +8,5 @@ pub mod geometry;
 pub mod options;
 pub mod protocol;
 pub mod rle;
+pub mod status;
 pub mod units;
