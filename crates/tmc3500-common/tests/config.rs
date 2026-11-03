@@ -171,11 +171,13 @@ fn bad_printer_lists_are_rejected() {
 
 #[test]
 fn printer_list_round_trips() {
-    let mut c = Config::default();
-    c.printers_cfg = vec![
-        entry("TM-C3500-1", "192.0.2.1", None),
-        entry("TM-C3500-2", "fe80::2", Some(1161)),
-    ];
+    let c = Config {
+        printers_cfg: vec![
+            entry("TM-C3500-1", "192.0.2.1", None),
+            entry("TM-C3500-2", "fe80::2", Some(1161)),
+        ],
+        ..Default::default()
+    };
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("c.toml");
     std::fs::write(&p, c.to_toml().unwrap()).unwrap();

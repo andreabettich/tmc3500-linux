@@ -9,7 +9,7 @@ use tmc3500_core::status::printer::{
 };
 use tmc3500_core::status::snmp::{Oid, Value, VarBind};
 use tmc3500_fakeprinter::{FakePrinter, SnmpMode};
-use tmc3500_monitor::{render_metrics, Monitor};
+use tmc3500_monitor::{render_metrics, Monitor, Poll};
 
 const BIN: &str = env!("CARGO_BIN_EXE_tmc3500-monitor");
 
@@ -111,7 +111,12 @@ fn status(err_bits: u8, cyan: i64) -> PrinterStatus {
 #[test]
 fn transitions_produce_events() {
     let h = H::new();
-    let mut m = Monitor::new("192.0.2.9".into(), h.alerter(), Thresholds::default());
+    let mut m = Monitor::new(
+        "192.0.2.9".into(),
+        Some("TM-C3500".into()),
+        h.alerter(),
+        Thresholds::default(),
+    );
     let ok = status(0, 50);
     let names =
         |v: Vec<tmc3500_common::alert::Event>| v.into_iter().map(|e| e.event).collect::<Vec<_>>();
@@ -141,20 +146,39 @@ fn transitions_produce_events() {
 #[test]
 fn metrics_text() {
     let st = status(0x40, 5);
-    let t = render_metrics("192.0.2.9", &Ok(st), &Thresholds::default(), 1_700_000_000);
+    let snap = Ok(st);
+    let poll = |snap| Poll {
+        printer: "192.0.2.9",
+        queue: "TM-C3500",
+        snap,
+    };
+    let t = render_metrics(&[poll(&snap)], &Thresholds::default(), 1_700_000_000);
+    let p = "printer=\"192.0.2.9\",queue=\"TM-C3500\"";
     for want in [
-        "# TYPE tmc3500_up gauge",
-        "tmc3500_up{printer=\"192.0.2.9\"} 1",
-        "tmc3500_last_poll_timestamp_seconds{printer=\"192.0.2.9\"} 1700000000",
-        "tmc3500_device_status{printer=\"192.0.2.9\"} 2",
-        "tmc3500_state_reason{printer=\"192.0.2.9\",reason=\"media-empty-error\"} 1",
-        "tmc3500_blocking{printer=\"192.0.2.9\"} 1",
-        "tmc3500_marker_level_percent{printer=\"192.0.2.9\",index=\"2\",marker=\"cyan\",description=\"Cyan SJIC22P(C)\"} 5",
+        "# TYPE tmc3500_up gauge".to_string(),
+        format!("tmc3500_up{{{p}}} 1"),
+        format!("tmc3500_last_poll_timestamp_seconds{{{p}}} 1700000000"),
+        format!("tmc3500_device_status{{{p}}} 2"),
+        format!("tmc3500_state_reason{{{p},reason=\"media-empty-error\"}} 1"),
+        format!("tmc3500_blocking{{{p}}} 1"),
+        format!("tmc3500_marker_level_percent{{{p},index=\"2\",marker=\"cyan\",description=\"Cyan SJIC22P(C)\"}} 5"),
     ] {
         assert!(t.lines().any(|l| l == want), "missing {want:?} in\n{t}");
     }
-    let t = render_metrics("p\"x", &Err("timeout".into()), &Thresholds::default(), 5);
-    assert!(t.contains("tmc3500_up{printer=\"p\\\"x\"} 0"), "{t}");
+    let down = Err("timeout".into());
+    let t = render_metrics(
+        &[Poll {
+            printer: "p\"x",
+            queue: "Q",
+            snap: &down,
+        }],
+        &Thresholds::default(),
+        5,
+    );
+    assert!(
+        t.contains("tmc3500_up{printer=\"p\\\"x\",queue=\"Q\"} 0"),
+        "{t}"
+    );
     assert!(!t.contains("tmc3500_device_status"));
 }
 
@@ -175,7 +199,10 @@ fn once_against_fake_writes_metrics_and_alerts() {
         String::from_utf8_lossy(&o.stderr)
     );
     let t = std::fs::read_to_string(h.textfile()).unwrap();
-    assert!(t.contains("tmc3500_up{printer=\"127.0.0.1\"} 1"), "{t}");
+    assert!(
+        t.contains("tmc3500_up{printer=\"127.0.0.1\",queue=\"TM-C3500\"} 1"),
+        "{t}"
+    );
     assert!(t.contains("reason=\"media-empty-error\""), "{t}");
     assert_eq!(h.events(), vec!["media-out"]);
     // no temp files left behind
@@ -197,7 +224,10 @@ fn once_unreachable() {
         .unwrap();
     assert_eq!(o.status.code(), Some(2));
     let t = std::fs::read_to_string(h.textfile()).unwrap();
-    assert!(t.contains("tmc3500_up{printer=\"127.0.0.1\"} 0"), "{t}");
+    assert!(
+        t.contains("tmc3500_up{printer=\"127.0.0.1\",queue=\"TM-C3500\"} 0"),
+        "{t}"
+    );
     assert_eq!(h.events(), vec!["unreachable"]);
 }
 
@@ -269,4 +299,133 @@ fn textfile_mode_is_configurable() {
         .permissions()
         .mode();
     assert_eq!(m & 0o777, 0o640);
+}
+
+#[test]
+fn metrics_for_several_printers_declare_each_metric_once() {
+    let up = Ok(status(0x40, 5));
+    let down = Err("timeout".to_string());
+    let t = render_metrics(
+        &[
+            Poll {
+                printer: "192.0.2.1",
+                queue: "TM-C3500-1",
+                snap: &up,
+            },
+            Poll {
+                printer: "192.0.2.2",
+                queue: "TM-C3500-2",
+                snap: &down,
+            },
+            Poll {
+                printer: "192.0.2.3",
+                queue: "TM-C3500-3",
+                snap: &up,
+            },
+        ],
+        &Thresholds::default(),
+        7,
+    );
+    for want in [
+        "tmc3500_up{printer=\"192.0.2.1\",queue=\"TM-C3500-1\"} 1",
+        "tmc3500_up{printer=\"192.0.2.2\",queue=\"TM-C3500-2\"} 0",
+        "tmc3500_up{printer=\"192.0.2.3\",queue=\"TM-C3500-3\"} 1",
+        "tmc3500_blocking{printer=\"192.0.2.3\",queue=\"TM-C3500-3\"} 1",
+    ] {
+        assert!(t.lines().any(|l| l == want), "missing {want:?} in\n{t}");
+    }
+    // the text format needs one HELP/TYPE per metric and all its samples together
+    let mut seen: Vec<&str> = Vec::new();
+    let mut current = "";
+    for l in t.lines() {
+        if let Some(rest) = l.strip_prefix("# TYPE ") {
+            let name = rest.split(' ').next().unwrap();
+            assert!(!seen.contains(&name), "{name} declared twice:\n{t}");
+            seen.push(name);
+            current = name;
+        } else if !l.starts_with('#') {
+            let name = l.split('{').next().unwrap();
+            assert_eq!(name, current, "sample outside its family:\n{t}");
+        }
+    }
+    assert!(!t.contains("printer=\"192.0.2.2\",queue=\"TM-C3500-2\"} 2"));
+}
+
+#[test]
+fn once_polls_every_configured_printer() {
+    let h = H::new();
+    let a = FakePrinter::start_local().unwrap();
+    // a second loopback address, so the two printers have different hosts
+    let b = FakePrinter::start(tmc3500_fakeprinter::Options {
+        bind: "127.0.0.2".parse().unwrap(),
+        ..Default::default()
+    })
+    .unwrap();
+    let p = h.dir.path().join("multi.toml");
+    let d = h.dir.path().display();
+    let write = |extra: &str| {
+        std::fs::write(
+            &p,
+            format!(
+                "[snmp]\ntimeout_ms = 200\nretries = 0\n\
+                 [alerts]\ndir = \"{d}/alert.d\"\nstate_dir = \"{d}/state\"\n\
+                 [monitor]\ninterval_ms = 60000\ntextfile = \"{}\"\n\
+                 [[printers]]\nqueue = \"TM-C3500-1\"\nhost = \"127.0.0.1\"\nsnmp_port = {}\n\
+                 [[printers]]\nqueue = \"TM-C3500-2\"\nhost = \"127.0.0.2\"\nsnmp_port = {}\n{extra}",
+                h.textfile().display(),
+                a.snmp_port(),
+                b.snmp_port()
+            ),
+        )
+        .unwrap()
+    };
+    write("");
+    let once = || {
+        Command::new(BIN)
+            .args(["--once"])
+            .env("TMC3500_CONFIG", &p)
+            .output()
+            .unwrap()
+    };
+    // both out of paper: one alert per printer
+    a.set_paper_out(true);
+    b.set_paper_out(true);
+    let o = once();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let t = std::fs::read_to_string(h.textfile()).unwrap();
+    assert!(
+        t.contains("tmc3500_up{printer=\"127.0.0.1\",queue=\"TM-C3500-1\"} 1"),
+        "{t}"
+    );
+    assert!(
+        t.contains("tmc3500_up{printer=\"127.0.0.2\",queue=\"TM-C3500-2\"} 1"),
+        "{t}"
+    );
+    let raw = std::fs::read_to_string(h.dir.path().join("alerts.jsonl")).unwrap();
+    let ev: Vec<serde_json::Value> = raw
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let mut queues: Vec<&str> = ev
+        .iter()
+        .filter(|e| e["event"] == "media-out")
+        .map(|e| e["queue"].as_str().unwrap())
+        .collect();
+    queues.sort();
+    assert_eq!(queues, vec!["TM-C3500-1", "TM-C3500-2"], "{raw}");
+    // one printer unreachable: exit 2, the other still reported
+    b.set_snmp_mode(SnmpMode::Silent);
+    let o = once();
+    assert_eq!(o.status.code(), Some(2));
+    let t = std::fs::read_to_string(h.textfile()).unwrap();
+    assert!(t.contains("queue=\"TM-C3500-1\"} 1"), "{t}");
+    assert!(
+        t.contains("tmc3500_up{printer=\"127.0.0.2\",queue=\"TM-C3500-2\"} 0"),
+        "{t}"
+    );
 }
