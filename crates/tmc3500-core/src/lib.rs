@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cupsopts;
+pub mod decode;
 pub mod error;
 pub mod geometry;
 pub mod options;
