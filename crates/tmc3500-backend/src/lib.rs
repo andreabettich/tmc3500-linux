@@ -335,6 +335,16 @@ impl Backend {
         }
     }
 
+    /// The last status says the printer is working (printing or warming up): not a stall.
+    fn printer_busy(&self) -> bool {
+        self.last_status.as_ref().is_some_and(|s| {
+            matches!(
+                s.printer,
+                Some(PrinterState::Printing) | Some(PrinterState::Warmup)
+            )
+        })
+    }
+
     /// Poll if the status interval has elapsed, else return the last known blocking state.
     fn poll_if_due(&mut self) -> Option<bool> {
         match self.next_poll {
@@ -489,7 +499,7 @@ impl Backend {
                             self.log.info("Printer is not accepting data; waiting");
                             stalled_logged = true;
                         }
-                        if self.poll_if_due() == Some(true) {
+                        if self.poll_if_due() == Some(true) || self.printer_busy() {
                             stall_since = Instant::now();
                         } else if stall_since.elapsed() >= stall_timeout {
                             pending.drain(..off);
@@ -537,10 +547,7 @@ impl Backend {
                 }
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
                     let blocking = self.poll_if_due();
-                    let printing = self
-                        .last_status
-                        .as_ref()
-                        .is_some_and(|s| s.printer == Some(PrinterState::Printing));
+                    let printing = self.printer_busy();
                     // Bytes still in our send queue were never received by the printer.
                     let queue = tmc3500_common::net::send_queue(stream);
                     if let (Some(q), Some(prev)) = (queue, last_queue) {

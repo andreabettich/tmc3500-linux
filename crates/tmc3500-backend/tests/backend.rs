@@ -659,3 +659,21 @@ fn slow_alert_hooks_do_not_delay_the_job() {
     // the alert was still delivered before exit
     assert_eq!(h.alert_names(), vec!["ink-low"]);
 }
+
+#[test]
+fn busy_printer_reporting_printing_is_not_a_stall() {
+    // larger than the socket buffers, so the backend's writes really block
+    let mut job = Vec::new();
+    for _ in 0..16 {
+        job.extend_from_slice(&big_job());
+    }
+    let mut h = H::new(&job);
+    h.extra_backend = "stall_timeout_ms = 800".into();
+    h.fake.set_paused(true);
+    let child = h.spawn_file(&h.uri());
+    std::thread::sleep(Duration::from_millis(1500));
+    h.fake.set_paused(false);
+    let r = finish(child, Duration::from_secs(30));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(h.fake.accepted_jobs().len(), 1);
+}

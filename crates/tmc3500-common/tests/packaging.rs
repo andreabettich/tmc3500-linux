@@ -66,11 +66,12 @@ fn run_hook(name: &str, env_file: &str, tool_var: &str) -> String {
         .spawn()
         .unwrap();
     use std::io::Write;
-    c.stdin
+    // an unconfigured hook exits without reading stdin: EPIPE is fine
+    let _ = c
+        .stdin
         .take()
         .unwrap()
-        .write_all(b"{\"event\":\"media-out\"}\n")
-        .unwrap();
+        .write_all(b"{\"event\":\"media-out\"}\n");
     assert!(c.wait().unwrap().success());
     std::fs::read_to_string(rec).unwrap_or_default()
 }
