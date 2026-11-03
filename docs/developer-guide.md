@@ -39,7 +39,7 @@ tmc3500ctl       (admin)   ── SNMP / lpadmin / lp  ──▶ status, ink, co
 | `tmc3500-monitor` | systemd service: idle polling, alert transitions, metrics. | `src/lib.rs` |
 | `tmc3500ctl` | Admin CLI, every command supports `--json`. | `src/main.rs` |
 | `tmc3500-fakeprinter` | Simulated printer (TCP 9100 + SNMP agent, scripted faults) for tests and end-to-end runs. | `src/lib.rs` |
-| `xtask` | Developer tools: fits colour tables from Windows chart captures. Not shipped. | `src/lib.rs`, `tests/fit.rs` |
+| `xtask` | Developer tools: fits colour tables from Windows chart captures; `compare-jobs a.prn b.prn` decodes two jobs and reports page sizes, ink bounding boxes, their offset and the dots that differ (e.g. a Linux job against a Windows print-to-file capture). Not shipped. | `src/lib.rs`, `tests/fit.rs`, `tests/compare.rs` |
 | `fuzz/` | `cargo fuzz` targets: `cupsraster`, `options`, `snmp`, `decode`, `colour_table`. | |
 
 `tmc3500-core` modules:
@@ -69,6 +69,7 @@ tmc3500ctl       (admin)   ── SNMP / lpadmin / lp  ──▶ status, ink, co
 | `tmc3500-core/tests/weave_structure.rs` | Pass structure (feeds, block placement, nozzle rows) matches the captures, including borderless off in Quality modes. |
 | `rastertotmc3500/tests/golden_raster.rs` | The whole filter, run on the source PNGs, matches the captures' command and raster-block structure. |
 | `rastertotmc3500/tests/ppd.rs` | The PPD is well formed, offers every option the core accepts, has the Windows defaults, and constrains the combinations the core rejects. |
+| `xtask/tests/compare.rs` | `compare-jobs`: bounding boxes, offsets and dot differences. |
 | `xtask/tests/fit.rs` | Colour fitting round trips. The shipped Matte Speed table prints the chart with the same ink as Windows (median < 1 %, p90 < 2 %). |
 | `tmc3500-backend/tests/backend.rs` | Error policy against the fake printer: hold on a lost connection, no duplicates, waiting on paper out, cancel, unreachable before start. |
 | `tmc3500-monitor/tests/`, `tmc3500ctl/tests/`, `tmc3500-common/tests/` | Alert transitions, metrics, CLI JSON, config validation, hook security, packaging paths and modes. |

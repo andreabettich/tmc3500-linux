@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 //! cargo run -p xtask -- fit-colour <capture.prn> <chart.png> <layout.json> <out.lut>
 //! cargo run -p xtask -- derive-colour-mode <base.lut> <ref-preferred.lut> <ref-mode.lut> <out.lut>
+//! cargo run -p xtask -- compare-jobs <a.prn> <b.prn>
 
 const USAGE: &str = "usage:
   xtask fit-colour <capture.prn> <chart.png> <layout.json> <out.lut>
-  xtask derive-colour-mode <base.lut> <ref-preferred.lut> <ref-mode.lut> <out.lut>";
+  xtask derive-colour-mode <base.lut> <ref-preferred.lut> <ref-mode.lut> <out.lut>
+  xtask compare-jobs <a.prn> <b.prn>   (page sizes, ink bounding boxes, offset, differing dots)";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -13,6 +15,7 @@ fn main() {
         [cmd, base, pref, mode, out] if cmd == "derive-colour-mode" => {
             run_derive(base, pref, mode, out)
         }
+        [cmd, a, b] if cmd == "compare-jobs" => run_compare(a, b),
         _ => Err(USAGE.to_string()),
     };
     if let Err(e) = result {
@@ -47,4 +50,28 @@ fn run_derive(base: &str, pref: &str, mode: &str, out: &str) -> Result<(), Strin
     let lut = xtask::derive_mode(&read_lut(base)?, &read_lut(pref)?, &read_lut(mode)?)
         .ok_or("tables have different grids")?;
     std::fs::write(out, lut.to_bytes()).map_err(|e| format!("{out}: {e}"))
+}
+
+fn run_compare(a: &str, b: &str) -> Result<(), String> {
+    let pages = xtask::compare_jobs(&read(a)?, &read(b)?)?;
+    let mut same = true;
+    for (n, c) in pages.iter().enumerate() {
+        println!(
+            "page {}: size {:?} vs {:?}, ink {:?} vs {:?}, offset {:?}, differing dots {}",
+            n + 1,
+            c.size_a,
+            c.size_b,
+            c.bbox_a,
+            c.bbox_b,
+            c.offset,
+            c.differing_dots
+        );
+        same &= c.differing_dots == 0 && c.size_a == c.size_b;
+    }
+    if same {
+        println!("identical");
+        Ok(())
+    } else {
+        Err("jobs differ".into())
+    }
 }

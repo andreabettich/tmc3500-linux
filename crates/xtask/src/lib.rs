@@ -601,3 +601,69 @@ pub fn fit(job: &[u8], img: &Image, layout: &Layout) -> Result<(Lut, Report), St
     }
     Ok((lut, report))
 }
+
+/// Inked area of a page: `[left, top, right, bottom]` (inclusive dots), `None` if blank.
+pub fn ink_bbox(page: &InkPage) -> Option<[u32; 4]> {
+    let (top, bottom) = page.inked_rows()?;
+    let inked_col =
+        |x: u32| (top..=bottom).any(|y| Ink::ALL.iter().any(|&i| page.get(i, x, y) != 0));
+    let left = (0..page.width()).find(|&x| inked_col(x))?;
+    let right = (left..page.width()).rev().find(|&x| inked_col(x))?;
+    Some([left, top, right, bottom])
+}
+
+/// How two decoded pages differ (see `xtask compare-jobs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageComparison {
+    pub size_a: [u32; 2],
+    pub size_b: [u32; 2],
+    pub bbox_a: Option<[u32; 4]>,
+    pub bbox_b: Option<[u32; 4]>,
+    /// Top-left of b's ink minus top-left of a's ink.
+    pub offset: Option<[i64; 2]>,
+    /// Dots (per ink) whose drop size differs, over the union of both pages.
+    pub differing_dots: u64,
+}
+
+pub fn compare_pages(a: &InkPage, b: &InkPage) -> PageComparison {
+    let (bbox_a, bbox_b) = (ink_bbox(a), ink_bbox(b));
+    let offset = match (bbox_a, bbox_b) {
+        (Some(p), Some(q)) => Some([
+            i64::from(q[0]) - i64::from(p[0]),
+            i64::from(q[1]) - i64::from(p[1]),
+        ]),
+        _ => None,
+    };
+    let mut differing_dots = 0;
+    for y in 0..a.height().max(b.height()) {
+        for x in 0..a.width().max(b.width()) {
+            for &i in &Ink::ALL {
+                if a.get(i, x, y) != b.get(i, x, y) {
+                    differing_dots += 1;
+                }
+            }
+        }
+    }
+    PageComparison {
+        size_a: [a.width(), a.height()],
+        size_b: [b.width(), b.height()],
+        bbox_a,
+        bbox_b,
+        offset,
+        differing_dots,
+    }
+}
+
+/// Decode two print jobs and compare them page by page.
+pub fn compare_jobs(a: &[u8], b: &[u8]) -> Result<Vec<PageComparison>, String> {
+    let pa = reassemble(a).map_err(|e| format!("first job does not decode: {e:?}"))?;
+    let pb = reassemble(b).map_err(|e| format!("second job does not decode: {e:?}"))?;
+    if pa.len() != pb.len() {
+        return Err(format!("page counts differ: {} vs {}", pa.len(), pb.len()));
+    }
+    Ok(pa
+        .iter()
+        .zip(&pb)
+        .map(|(p, q)| compare_pages(p, q))
+        .collect())
+}
