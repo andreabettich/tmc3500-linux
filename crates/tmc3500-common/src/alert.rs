@@ -7,7 +7,7 @@ use crate::time::{rfc3339, unix_now};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -171,7 +171,11 @@ impl Alerter {
 
     fn save_state(&self, st: &State, warnings: &mut Vec<String>) {
         let Some(p) = &self.state_file else { return };
-        match write_atomic(p, serde_json::to_string(st).unwrap_or_default().as_bytes()) {
+        match write_atomic_mode(
+            p,
+            serde_json::to_string(st).unwrap_or_default().as_bytes(),
+            0o660,
+        ) {
             Ok(()) => self.save_ok.store(true, Ordering::SeqCst),
             Err(e) => {
                 self.save_ok.store(false, Ordering::SeqCst);
@@ -232,9 +236,23 @@ impl Alerter {
         d
     }
 
-    /// Executable hooks in name order. Skips hidden files, editor/dpkg leftovers, non-executable
-    /// and group/world-writable files.
+    /// Executable hooks in name order. The directory and each hook must be owned by root or the
+    /// running user and not be group/world-writable; symlinks, hidden files and editor/dpkg
+    /// leftovers are skipped.
     pub fn hooks(&self, warnings: &mut Vec<String>) -> Vec<PathBuf> {
+        let euid = effective_uid();
+        match std::fs::symlink_metadata(&self.dir) {
+            Ok(md) => {
+                if let Some(why) = untrusted(&md, euid) {
+                    warnings.push(format!("alert dir {} ignored: {why}", self.dir.display()));
+                    return Vec::new();
+                }
+            }
+            Err(e) => {
+                warnings.push(format!("alert dir {}: {e}", self.dir.display()));
+                return Vec::new();
+            }
+        }
         let rd = match std::fs::read_dir(&self.dir) {
             Ok(rd) => rd,
             Err(e) => {
@@ -254,18 +272,18 @@ impl Alerter {
                 continue;
             }
             let path = entry.path();
-            let Ok(md) = std::fs::metadata(&path) else {
+            let Ok(md) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
-            let mode = md.permissions().mode();
-            if !md.is_file() || mode & 0o111 == 0 {
+            if md.file_type().is_symlink() {
+                warnings.push(format!("skipping symlinked alert hook {}", path.display()));
                 continue;
             }
-            if mode & 0o022 != 0 {
-                warnings.push(format!(
-                    "skipping group/world-writable alert hook {}",
-                    path.display()
-                ));
+            if !md.is_file() || md.permissions().mode() & 0o111 == 0 {
+                continue;
+            }
+            if let Some(why) = untrusted(&md, euid) {
+                warnings.push(format!("skipping alert hook {}: {why}", path.display()));
                 continue;
             }
             v.push(path);
@@ -279,6 +297,30 @@ impl Alerter {
         }
         v
     }
+}
+
+/// Hooks and the hook directory must be owned by root or by the user running the program.
+pub fn owner_allowed(uid: u32, euid: u32) -> bool {
+    uid == 0 || uid == euid
+}
+
+/// The effective uid of this process (owner of `/proc/self`); `u32::MAX` if unknown, which
+/// then only allows root-owned hooks.
+pub fn effective_uid() -> u32 {
+    std::fs::metadata("/proc/self").map_or(u32::MAX, |m| m.uid())
+}
+
+fn untrusted(md: &std::fs::Metadata, euid: u32) -> Option<String> {
+    if md.permissions().mode() & 0o022 != 0 {
+        return Some("group/world-writable".into());
+    }
+    if !owner_allowed(md.uid(), euid) {
+        return Some(format!(
+            "owned by uid {} (not root or uid {euid})",
+            md.uid()
+        ));
+    }
+    None
 }
 
 fn run_hook(path: &Path, ev: &Event, json: &str, timeout: Duration) -> HookOutcome {
@@ -363,22 +405,74 @@ impl ConditionTracker {
     }
 }
 
-/// Write `data` to `path` atomically (temp file in the same directory, then rename).
+static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// An unpredictable suffix for temporary file names.
+fn random_suffix() -> String {
+    let mut b = [0u8; 8];
+    let ok = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .is_ok();
+    if !ok {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        b = (t ^ (u64::from(std::process::id()) << 32) ^ n.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            .to_le_bytes();
+    }
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Write `data` to `path` atomically: a new temp file with an unpredictable name is created with
+/// `O_EXCL` (a planted symlink cannot redirect the write), then renamed over `path`. An existing
+/// file keeps its mode (and owner, when permitted); a new one gets `0644`.
 pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    write_atomic_mode(path, data, 0o644)
+}
+
+/// Like [`write_atomic`], with the mode used when `path` does not exist yet.
+pub fn write_atomic_mode(path: &Path, data: &[u8], new_mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".into());
-    let tmp = dir.join(format!(".{name}.tmp.{}", std::process::id()));
-    let res = (|| {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(data)?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, path)
-    })();
-    if res.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    let existing = std::fs::symlink_metadata(path).ok().filter(|m| m.is_file());
+    let mode = existing
+        .as_ref()
+        .map_or(new_mode, |m| m.permissions().mode() & 0o7777);
+    let mut last_err = None;
+    for _ in 0..8 {
+        let tmp = dir.join(format!(".{name}.{}.tmp", random_suffix()));
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp);
+        let mut f = match f {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_err = Some(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let res = (|| {
+            f.write_all(data)?;
+            if let Some(m) = &existing {
+                // best effort: only root can give the file away
+                let _ = std::os::unix::fs::fchown(&f, Some(m.uid()), Some(m.gid()));
+            }
+            f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, path)
+        })();
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return res;
     }
-    res
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("cannot create temp file")))
 }

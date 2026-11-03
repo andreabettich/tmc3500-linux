@@ -239,3 +239,75 @@ fn repeats_are_suppressed_in_process_even_without_a_writable_state_file() {
     a.emit(&ev(EventKind::MediaOut, "media-out"));
     assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 2);
 }
+
+#[test]
+fn symlinked_hooks_and_writable_alert_dir_are_refused() {
+    let (d, a) = setup();
+    let out = d.path().join("ran");
+    let real = d.path().join("real-hook");
+    fs::write(&real, format!("#!/bin/sh\ntouch {}\n", out.display())).unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&real, d.path().join("alert.d/10-link")).unwrap();
+    let r = a.emit(&ev(EventKind::MediaOut, "media-out"));
+    assert!(r.hooks.is_empty(), "{r:?}");
+    assert!(!out.exists());
+    assert!(r.warnings.iter().any(|w| w.contains("symlink")), "{r:?}");
+
+    // a group-writable alert.d is not trusted at all
+    hook(
+        &d.path().join("alert.d"),
+        "20-ok",
+        &format!("touch {}", out.display()),
+        0o755,
+    );
+    fs::set_permissions(d.path().join("alert.d"), fs::Permissions::from_mode(0o775)).unwrap();
+    a.clear("media-out");
+    let r = a.emit(&ev(EventKind::MediaOut, "media-out"));
+    assert!(r.hooks.is_empty(), "{r:?}");
+    assert!(r.warnings.iter().any(|w| w.contains("writable")), "{r:?}");
+}
+
+#[test]
+fn hook_owner_rule() {
+    use tmc3500_common::alert::owner_allowed;
+    assert!(owner_allowed(0, 7));
+    assert!(owner_allowed(7, 7));
+    assert!(!owner_allowed(8, 7));
+}
+
+#[test]
+fn atomic_write_does_not_follow_a_planted_temp_symlink() {
+    use tmc3500_common::alert::write_atomic;
+    let d = tempfile::tempdir().unwrap();
+    let victim = d.path().join("victim");
+    fs::write(&victim, "precious").unwrap();
+    let target = d.path().join("alerts.json");
+    // the old implementation used this predictable name
+    std::os::unix::fs::symlink(
+        &victim,
+        d.path()
+            .join(format!(".alerts.json.tmp.{}", std::process::id())),
+    )
+    .unwrap();
+    write_atomic(&target, b"{}").unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "{}");
+    // an existing file keeps its mode
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+    write_atomic(&target, b"{\"a\":1}").unwrap();
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+}
+
+#[test]
+fn alert_state_file_is_group_writable_for_the_shared_state_dir() {
+    let (d, a) = setup();
+    a.emit(&ev(EventKind::MediaOut, "media-out"));
+    let m = fs::metadata(d.path().join("state/alerts.json"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(m & 0o777, 0o660);
+}

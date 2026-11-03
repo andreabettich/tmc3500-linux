@@ -11,12 +11,15 @@ fn unit_has_required_hardening() {
         "ProtectSystem=strict",
         "PrivateTmp=yes",
         "User=tmc3500",
-        "StateDirectory=tmc3500",
+        "SupplementaryGroups=lp",
+        "ReadWritePaths=/var/lib/tmc3500",
         "ReadWritePaths=-/var/lib/prometheus/node-exporter",
         "CapabilityBoundingSet=",
     ] {
         assert!(lines.contains(&want), "missing {want}");
     }
+    // StateDirectory= would chown the shared state dir to tmc3500:tmc3500 and lock lp out
+    assert!(!lines.iter().any(|l| l.starts_with("StateDirectory=")));
     // IPAddressAllow is site specific: only as a commented example
     assert!(lines
         .iter()

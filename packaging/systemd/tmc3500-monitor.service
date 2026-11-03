@@ -15,8 +15,12 @@ RestartSec=10s
 # stable owner.
 User=tmc3500
 Group=tmc3500
-StateDirectory=tmc3500
-StateDirectoryMode=0750
+# The alert repeat-suppression state (/var/lib/tmc3500/alerts.json) is shared with the CUPS
+# backend, which runs as lp. The package creates /var/lib/tmc3500 as root:lp mode 2770 (setgid,
+# so new files belong to group lp; files are written 0660). No StateDirectory= here: systemd would
+# chown the directory to tmc3500:tmc3500 and lock the backend out.
+SupplementaryGroups=lp
+ReadWritePaths=/var/lib/tmc3500
 
 # Hardening (spec section 6)
 NoNewPrivileges=yes
@@ -41,7 +45,7 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 CapabilityBoundingSet=
 AmbientCapabilities=
-UMask=0027
+UMask=0007
 # AF_UNIX for syslog/logger alert hooks; AF_INET/AF_INET6 for SNMP and webhooks.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
@@ -58,9 +62,6 @@ ReadWritePaths=-/var/lib/prometheus/node-exporter
 #   IPAddressAllow=192.0.2.50
 #   # add your mail relay / webhook endpoints if alert hooks need them:
 #   #IPAddressAllow=192.0.2.25
-#
-# Mail hook through the local MTA (e.g. Postfix sendmail) needs its spool writable:
-#   ReadWritePaths=/var/spool/postfix/maildrop
 
 [Install]
 WantedBy=multi-user.target

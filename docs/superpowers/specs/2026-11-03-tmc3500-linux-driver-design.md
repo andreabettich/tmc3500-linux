@@ -273,7 +273,11 @@ Still to be confirmed:
 
 - A `tmc3500_<ver>_{amd64,arm64}.deb` built with `cargo-deb`, containing:
   - `/usr/lib/cups/filter/rastertotmc3500`;
-  - `/usr/lib/cups/backend/tmc3500` (mode 0700, root, as CUPS requires for backends that run as root);
+  - `/usr/lib/cups/backend/tmc3500` (mode 0755, root-owned, so CUPS runs it as `lp`, as section 6
+    requires; it needs no privileges);
+  - `/var/lib/tmc3500` (root:lp, mode 2770): alert repeat-suppression state shared by the backend
+    (`lp`) and the monitor (user `tmc3500`, supplementary group `lp`), and the partial-send markers;
+  - `/etc/tmc3500/alert.d/` (root:root, mode 0755; hooks root-owned, not group/world-writable);
   - the PPD in `/usr/share/ppd/tmc3500/`;
   - `tmc3500-monitor.service`;
   - `/etc/tmc3500/{tmc3500.toml,alert.d/}`;
