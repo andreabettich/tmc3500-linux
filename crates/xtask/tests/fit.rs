@@ -1,11 +1,12 @@
 //! Round trip: a chart printed by our own pipeline must fit back to the converter that printed it.
 use std::path::PathBuf;
 use tmc3500_core::color::Converter;
+use tmc3500_core::color::{provisional_split, Lut};
 use tmc3500_core::cupsraster::Reader;
 use tmc3500_core::options::JobConfig;
 use tmc3500_core::pipeline::render_page;
 use tmc3500_core::protocol::job::{encode_job, JobMeta};
-use xtask::{fit, read_chart_png, Image, Layout};
+use xtask::{derive_mode, fit, read_chart_png, Image, Layout};
 
 fn layout() -> Layout {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -204,4 +205,81 @@ fn a_job_without_the_chart_is_rejected() {
     };
     let job = encode_job(&cfg, &meta, &[]);
     assert!(fit(&job, &chart_image(&layout(), 0), &layout()).is_err());
+}
+
+fn flat(n: usize, a: [u16; 4]) -> Lut {
+    Lut::new(
+        n,
+        vec![a; n * n * n],
+        std::array::from_fn(|_| provisional_split()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn colour_mode_is_carried_over_scaled_by_the_ink_level() {
+    // reference: the mode adds 6000 cyan and removes 3000 black; the base prints half the ink
+    let (pref, mode) = (
+        flat(17, [20000, 20000, 0, 0]),
+        flat(17, [17000, 26000, 0, 6000]),
+    );
+    let base = flat(17, [10000, 10000, 0, 0]);
+    let d = derive_mode(&base, &pref, &mode).unwrap();
+    assert_eq!(d.amounts([10, 200, 30]), [8500, 13000, 0, 3000]);
+    // never below zero, and the base's split curves are kept
+    // (same total ink as the reference, so the full −3000 black applies)
+    let d = derive_mode(&flat(17, [1000, 39000, 0, 0]), &pref, &mode).unwrap();
+    assert_eq!(d.amounts([0, 0, 0])[0], 0);
+    assert_eq!(d.split_curve(1), base.split_curve(1));
+    // identical reference tables: the base comes back unchanged
+    assert_eq!(derive_mode(&base, &pref, &pref).unwrap(), base);
+}
+
+/// End to end against Windows: the chart printed by our pipeline with the shipped Matte Speed table
+/// puts down the same ink as the Windows driver did (capture 701), colour by colour.
+#[test]
+fn shipped_table_prints_the_chart_like_windows() {
+    let png = std::fs::read(testdata("c1_colour_chart_session2.png")).unwrap();
+    let img = read_chart_png(&png).unwrap();
+    let lut_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packaging/colour/matte-speed-preferred.lut");
+    let lut = Lut::parse(&std::fs::read(lut_path).unwrap()).unwrap();
+    let cfg = JobConfig::from_cups("PageSize=Custom.4.25x6.88in", 1).unwrap();
+    let conv = Converter::with_lut(&cfg.color, cfg.black, lut);
+    let ras = chart_raster(&img, 1475, 2477, 1);
+    let mut rd = Reader::new(&ras[..]).unwrap();
+    let h = rd.next_page().unwrap().unwrap();
+    let page = render_page(&mut rd, &h, &cfg, &conv).unwrap();
+    let meta = JobMeta {
+        year: 2026,
+        month: 1,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        job_id: 1,
+        host_id: [0; 6],
+    };
+    let ours = xtask::samples(&encode_job(&cfg, &meta, &[page]), &img).unwrap();
+    let windows = xtask::samples(
+        &std::fs::read(testdata("701_chart_matte_speed.prn")).unwrap(),
+        &img,
+    )
+    .unwrap();
+    let mut diffs: Vec<f64> = windows
+        .iter()
+        .filter_map(|w| {
+            let o = ours.iter().find(|o| o.rgb == w.rgb)?;
+            let (a, b) = (w.amounts(), o.amounts());
+            Some((0..4).map(|i| (a[i] - b[i]).abs()).fold(0.0, f64::max))
+        })
+        .collect();
+    assert!(diffs.len() > 700, "{} colours compared", diffs.len());
+    diffs.sort_by(f64::total_cmp);
+    let (median, p90) = (diffs[diffs.len() / 2], diffs[diffs.len() * 9 / 10]);
+    // measured 2026-11-03: median 0.003, p90 0.007 (provisional colours: 0.254, 0.520)
+    assert!(
+        median < 0.01 && p90 < 0.02,
+        "median {median:.3} p90 {p90:.3}"
+    );
 }

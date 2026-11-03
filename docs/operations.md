@@ -117,12 +117,18 @@ Test the chain: `sudo -u tmc3500 /etc/tmc3500/alert.d/50-syslog < /dev/null` sho
 
 ## 6. Colour tables
 
-Brand colours depend on fitted colour tables in `/usr/share/tmc3500/colour/`, one per coating, quality and
-colour mode. Until they are installed the driver prints with provisional colours. For barcodes and black
-text use `-o TmBlack=KOnly`: it always prints pure black ink, with or without tables. Tables are produced
-from Windows colour-chart captures with
-`cargo run -p xtask -- fit-colour <capture.prn> <layout.json> <name>.lut` (the chart and its
-`layout.json` come from `tools/make_colour_chart.py` in the source tree).
+Colours come from tables in `/usr/share/tmc3500/colour/`, one per coating, quality and colour mode,
+fitted from the Windows driver's own output (see the `README` there). Printed through the filter, the
+colour chart puts down the same ink as Windows within 0.3 % per colour (median). The Preferred tables
+of every coating/quality and Matte Speed's Standard, gamma 1.8 and Off are measured; the other
+Standard/gamma 1.8/Off tables are derived from them. A missing or unreadable table makes the filter
+fall back to provisional colours with an `INFO`/`WARNING` line in the job log.
+
+For barcodes and black text, `-o TmBlack=KOnly` prints pure black ink (the tables, like Windows,
+build black from all four inks).
+
+Tables are rebuilt from Windows chart captures with `tools/build_colour_tables.sh <captures-dir>`
+in the source tree.
 
 ## 7. Hardening checklist
 
@@ -166,6 +172,6 @@ from Windows colour-chart captures with
 |---|---|
 | job stays "processing" | `lpstat -l -p TM-C3500`; `tmc3500ctl status`; is the printer in error? |
 | job held | alert text; `/var/lib/tmc3500/partial-job-*`; check output before releasing |
-| "no colour table … provisional" in the job log | expected until colour tables are installed |
+| "no colour table … provisional" in the job log | the table for that coating/quality/mode is missing from `/usr/share/tmc3500/colour/` |
 | filter `ERROR:` | options in the message; `lp -o ...` values must match the PPD names above |
 | debugging | `sudo cupsctl --debug-logging`; `/var/log/cups/error_log` |

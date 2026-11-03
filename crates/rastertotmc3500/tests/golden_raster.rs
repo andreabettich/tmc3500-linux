@@ -1,6 +1,9 @@
 //! Every Windows capture, rebuilt from its source image through the filter: the command skeleton
 //! (with TI/JH masked) and the raster block structure (pass positions, offsets, colours, widths)
-//! must match. Dot content is not compared: our dither and provisional colour differ by design.
+//! must match. Printed with the provisional colours: block edges follow where sparse dots fall,
+//! which depends on the colour table and the dither (ours differs from Windows' by design), and
+//! with the fitted tables 9 captures move an edge by 16-64 dots. Colour accuracy is checked
+//! against the Windows chart captures in crates/xtask/tests/fit.rs.
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

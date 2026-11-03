@@ -443,6 +443,46 @@ pub fn fit_samples(samples: &[Sample]) -> Option<Lut> {
     Lut::new(n, amounts, split_curves(samples))
 }
 
+/// A colour-mode table for a coating/quality that Windows was only captured with in Preferred mode:
+/// `base` (that coating/quality, Preferred) plus the mode's change measured on the reference
+/// coating/quality (`mode` − `pref`, node by node), scaled by the ratio of total ink between `base`
+/// and `pref`. Keeps the base's split curves. All three tables must share a grid.
+pub fn derive_mode(base: &Lut, pref: &Lut, mode: &Lut) -> Option<Lut> {
+    let n = base.grid();
+    if pref.grid() != n || mode.grid() != n {
+        return None;
+    }
+    let levels: Vec<u8> = (0..n)
+        .map(|i| ((i * 255 + (n - 1) / 2) / (n - 1)) as u8)
+        .collect();
+    let nodes: Vec<[u8; 3]> = (0..n * n * n)
+        .map(|i| [levels[i / (n * n)], levels[i / n % n], levels[i % n]])
+        .collect();
+    let total = |l: &Lut| -> f64 {
+        nodes
+            .iter()
+            .flat_map(|&c| l.amounts(c))
+            .map(f64::from)
+            .sum()
+    };
+    let scale = total(base) / total(pref).max(1.0);
+    let amounts = nodes
+        .iter()
+        .map(|&c| {
+            let (b, p, m) = (base.amounts(c), pref.amounts(c), mode.amounts(c));
+            std::array::from_fn(|i| {
+                let v = f64::from(b[i]) + scale * (f64::from(m[i]) - f64::from(p[i]));
+                v.round().clamp(0.0, 65535.0) as u16
+            })
+        })
+        .collect();
+    Lut::new(
+        n,
+        amounts,
+        std::array::from_fn(|i| base.split_curve(i).to_vec()),
+    )
+}
+
 /// Solves A·x = b for symmetric positive definite A (row-major m×m), 4 right-hand sides.
 fn cholesky_solve(mut a: Vec<f64>, mut b: Vec<[f64; 4]>, m: usize) -> Option<Vec<[f64; 4]>> {
     for j in 0..m {

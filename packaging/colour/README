@@ -1,5 +1,17 @@
-Fitted colour tables for rastertotmc3500, one file per coating, quality and colour mode:
+Colour tables for rastertotmc3500, one per coating, quality and colour mode:
   {plain,matte,synthetic,wristband,glossy}-{speed,q1,q2}-{preferred,standard,gamma18,off}.lut
-Built with `cargo run -p xtask -- fit-colour <capture.prn> <layout.json> <out.lut>` from Windows
-colour-chart captures (tmc3500_colour_kit). Without a table the filter uses provisional colours and
-logs an INFO line. Override the directory with TMC3500_COLOUR_DIR.
+(Plain: Speed only; Wristband: no Quality 2.) Format TMCLUT2: per-ink ink amounts on a 17-level RGB
+grid plus a per-ink split curve (amount -> small/medium/large drops); see tmc3500_core::color::Lut.
+
+Our own derived data, fitted from Windows driver v2.6.0.2 colour-chart captures (session 2,
+2026-11-03) with tools/build_colour_tables.sh; no Epson files.
+- Measured: every *-preferred table, and matte-speed-{standard,gamma18,off}.
+- Derived (not measured): the other {standard,gamma18,off} tables = their coating/quality's
+  Preferred table plus the change the mode makes on Matte Speed, scaled by ink level.
+Checked against Windows by printing the chart through the filter: ink amount per colour within
+0.3 % (median) and 0.7 % (90th percentile) for every measured table. Colours the session-2 chart
+did not print (145 of 729 grid colours) are inferred; cross-validation puts them within 1.3 %
+(median) and 3.8 % (90th percentile).
+
+Without a table the filter uses provisional colours and logs an INFO line. Override the directory
+with TMC3500_COLOUR_DIR.

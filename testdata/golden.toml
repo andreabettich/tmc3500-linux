@@ -35,7 +35,7 @@
 "306_save_lowerupper_contlabel" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmMediaSaving=LowerUpper" }
 "307_save_lower_contpaper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper TmMediaSaving=Lower" }
 "308_save_lowerupper_contpaper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper TmMediaSaving=LowerUpper" }
-"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain", raster = "skip" } # Plain colour table moves colour edges (phase 3)
+"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain", raster = "skip" } # block edges follow where sparse dots fall, which depends on colour and dither
 "311_coating_synthetic" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Synthetic" }
 "312_coating_wristband" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Wristband" }
 "313_coating_glossy" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Glossy" }

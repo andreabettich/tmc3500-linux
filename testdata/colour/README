@@ -1,0 +1,10 @@
+c1_colour_chart_session2.png  the chart printed in colour session 2 (from tools/make_colour_chart.py
+                              before its width fix). It is 1440 px wide but its patch grid needs
+                              1470, so every row crossing the last patch column is 36 bytes too
+                              long: not a valid PNG. Windows printed it anyway, reading fixed
+                              4321-byte rows, so the chart came out sheared (12 px per long row)
+                              and each wrap shifted the RGB byte order. xtask::read_chart_png
+                              reproduces that decode exactly; 145 of the 729 cube colours never
+                              reached the page and are inferred by the fit.
+c1_colour_chart.layout.json   patch list (colours, kinds) of that chart; positions are not used.
+701_chart_matte_speed.prn     Windows capture of the chart, defaults (Matte, Speed, Preferred).

@@ -43,6 +43,7 @@ assets = [
     ["../../packaging/alert.d/70-webhook", "etc/tmc3500/alert.d/", "755"],
     ["../../packaging/apparmor/tmc3500", "etc/apparmor.d/", "644"],
     ["../../packaging/colour/README", "usr/share/tmc3500/colour/", "644"],
+    ["../../packaging/colour/*.lut", "usr/share/tmc3500/colour/", "644"],
     ["../../docs/operations.md", "usr/share/doc/tmc3500/", "644"],
 ]
 systemd-units = { unit-name = "tmc3500-monitor", unit-scripts = "../../packaging/systemd", enable = false, start = false }

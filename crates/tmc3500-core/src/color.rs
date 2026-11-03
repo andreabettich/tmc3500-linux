@@ -138,6 +138,16 @@ impl Lut {
         out
     }
 
+    /// Grid levels per axis.
+    pub fn grid(&self) -> usize {
+        self.n
+    }
+
+    /// The split curve of one ink (`SPLIT_POINTS` points).
+    pub fn split_curve(&self, ink: usize) -> &[Drops] {
+        &self.split[ink]
+    }
+
     /// Ink amounts `[K, C, M, Y]` (65535 = every dot a large drop).
     pub fn amounts(&self, rgb: [u8; 3]) -> [u16; 4] {
         let mut out = [0f32; 4];
