@@ -74,11 +74,14 @@ mod tests {
         geometry(&JobConfig::from_cups(opts, 1).unwrap())
     }
 
+    /// (options, page_length, width, height, left, bottom, sn_width, sn_length)
+    type Case<'a> = (&'a str, u32, u32, u32, u32, u32, u16, u16);
+
     /// (options, page_length, width, height, left, bottom, sn_width, sn_length), all from the captures.
     #[test]
     fn matches_every_captured_geometry() {
         let c = "PageSize=Custom.4.25x6.88in";
-        let cases: &[(&str, u32, u32, u32, u32, u32, u16, u16)] = &[
+        let cases: &[Case] = &[
             ("", 2520, 1587, 2477, 56, 2477, 1120, 1748), // 000
             ("TmBorderless=False", 2520, 1587, 2477, 56, 2456, 1120, 1748), // 110
             (c, 2519, 1587, 2477, 56, 2477, 1120, 1748),  // 210
