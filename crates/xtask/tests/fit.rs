@@ -20,7 +20,7 @@ fn testdata(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The chart image (1440 px wide, 360 dpi). `shear` moves each row `shear` pixels further right
+/// The chart image (1476 px wide so the last patch column fits, 360 dpi). `shear` moves each row `shear` pixels further right
 /// (wrapping), like the session-2 chart as Windows decoded it.
 fn chart_image(l: &Layout, shear: u32) -> Image {
     let (w, h) = (1476u32, 828u32);
@@ -71,8 +71,8 @@ fn round_trip(opts: &str, w: u32, hscale: u32, shear: u32) {
     round_trip_without(opts, w, hscale, shear, |_| false);
 }
 
-/// `drop(i)`: cube patch i is not printed; its area gets an off-grid colour 10 levels away on each
-/// channel instead, so its node has to be inferred.
+/// `drop(i)`: cube patch i is not printed (left white), like the 145 session-2 colours that never
+/// reached the page, so its node has to be inferred from the others.
 fn round_trip_without(opts: &str, w: u32, hscale: u32, shear: u32, drop: impl Fn(usize) -> bool) {
     let mut l = layout();
     let full = l.clone();
@@ -90,8 +90,7 @@ fn round_trip_without(opts: &str, w: u32, hscale: u32, shear: u32, drop: impl Fn
         .collect();
     for p in &l.patches {
         if p.kind == "dropped" {
-            let off = p.rgb.map(|v| if v > 128 { v - 10 } else { v + 10 });
-            img.fill(p.x, p.y, l.patch, l.patch, off);
+            img.fill(p.x, p.y, l.patch, l.patch, [255, 255, 255]);
         }
     }
     let l = full;
@@ -113,10 +112,11 @@ fn round_trip_without(opts: &str, w: u32, hscale: u32, shear: u32, drop: impl Fn
     };
     let job = encode_job(&cfg, &meta, &[page]);
     let (lut, report) = fit(&job, &img, &l).unwrap();
-    let (mut worst, mut worst_inferred) = (0i64, 0i64);
+    let (mut worst, mut worst_inferred, mut amount_inferred) = (0i64, 0i64, 0i64);
     for p in l.patches.iter().filter(|p| p.kind == "cube") {
         let (want, got) = (conv.drops(p.rgb), lut.lookup(p.rgb));
-        let w = if dropped.contains(&p.rgb) {
+        let inferred = dropped.contains(&p.rgb);
+        let w = if inferred {
             &mut worst_inferred
         } else {
             &mut worst
@@ -124,11 +124,22 @@ fn round_trip_without(opts: &str, w: u32, hscale: u32, shear: u32, drop: impl Fn
         for (a, b) in want.iter().flatten().zip(got.iter().flatten()) {
             *w = (*w).max((i64::from(*a) - i64::from(*b)).abs());
         }
+        if inferred {
+            for (a, b) in conv.amounts(p.rgb).iter().zip(lut.amounts(p.rgb)) {
+                amount_inferred = amount_inferred.max((i64::from(*a) - i64::from(b)).abs());
+            }
+        }
     }
     // measured nodes: only the split curve's smoothing of the provisional kinks
     assert!(worst < 3300, "{opts}: worst node error {worst} / 65535");
+    // inferred nodes: the ink amount is smooth and follows its neighbours; the split of the
+    // provisional model has sharp kinks a neighbour cannot predict
     assert!(
-        worst_inferred < 5300,
+        amount_inferred < 3300,
+        "{opts}: worst inferred amount error {amount_inferred} / 65535"
+    );
+    assert!(
+        worst_inferred < 8000,
         "{opts}: worst inferred node error {worst_inferred} / 65535"
     );
     // Between nodes the provisional model has sharp kinks (small→medium drops at 1/3 and 2/3 ink) that a
@@ -282,4 +293,18 @@ fn shipped_table_prints_the_chart_like_windows() {
         median < 0.01 && p90 < 0.02,
         "median {median:.3} p90 {p90:.3}"
     );
+}
+
+#[test]
+fn derived_mode_respects_the_coating_ink_limit() {
+    // the reference mode raises the ink limit by 10 % (60000 → 66000 total); the base coating's
+    // limit is 40000, so derived nodes may total at most 44000. Here the change would take the
+    // base's magenta below zero; clamping it adds ink (49000 without the limit).
+    let n = 17;
+    let pref = flat(n, [15000, 15000, 15000, 15000]);
+    let mode = flat(n, [0, 33000, 0, 33000]);
+    let base = flat(n, [20000, 5000, 5000, 10000]);
+    let d = derive_mode(&base, &pref, &mode).unwrap();
+    let total: u32 = d.amounts([0, 255, 0]).iter().map(|&v| u32::from(v)).sum();
+    assert!((43990..=44000).contains(&total), "total {total}");
 }

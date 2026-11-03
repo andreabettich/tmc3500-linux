@@ -6,16 +6,18 @@
 # change the mode makes on Matte Speed (xtask derive-colour-mode).
 set -eu
 cap=${1:?captures dir}
-out=${2:-packaging/colour}
 here=$(cd "$(dirname "$0")/.." && pwd)
+out=${2:-$here/packaging/colour}
 png=$here/testdata/colour/c1_colour_chart_session2.png
 layout=$here/testdata/colour/c1_colour_chart.layout.json
 cargo build -q --release -p xtask --manifest-path "$here/Cargo.toml"
-x=$here/target/release/xtask
+x=${CARGO_TARGET_DIR:-$here/target}/release/xtask
 mkdir -p "$out"
+# fails (set -e) on the first table that cannot be fitted; no pipe, so the status is xtask's
 fit() { # capture-id table-name
-    printf '%s <- %s: ' "$2" "$1"
-    "$x" fit-colour "$cap/$1".prn "$png" "$layout" "$out/$2.lut" | tail -n 1
+    rm -f "$out/$2.lut"
+    report=$("$x" fit-colour "$cap/$1".prn "$png" "$layout" "$out/$2.lut")
+    printf '%s <- %s: %s\n' "$2" "$1" "$(printf '%s\n' "$report" | tail -n 1)"
 }
 fit 700_chart_plain_speed plain-speed-preferred
 fit 701_chart_matte_speed matte-speed-preferred
@@ -39,4 +41,6 @@ for base in plain-speed matte-q1 matte-q2 synthetic-speed synthetic-q1 synthetic
             "$out/matte-speed-$mode.lut" "$out/$base-$mode.lut"
     done
 done
-ls "$out"/*.lut | wc -l
+n=$(ls "$out"/*.lut | wc -l)
+[ "$n" -eq 48 ] || { echo "expected 48 tables, found $n" >&2; exit 1; }
+echo "$n tables"

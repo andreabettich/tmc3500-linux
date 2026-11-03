@@ -288,11 +288,11 @@ impl Converter {
     }
 
     /// Converter using a fitted table (ink adjustment and brightness are applied on top).
-    /// With K-only black the table is not used (tables are fitted from Windows' rich black): the
-    /// K-only formula keeps barcodes and text pure black.
+    /// With K-only black, neutral colours (R = G = B) bypass the table, which holds Windows' rich
+    /// black: the K-only formula keeps barcodes and text pure black ink; other colours still use it.
     pub fn with_lut(s: &ColorSettings, black: BlackMode, lut: Lut) -> Self {
         Self {
-            lut: (black == BlackMode::Rich).then_some(lut),
+            lut: Some(lut),
             ..Self::new(s, black)
         }
     }
@@ -302,10 +302,20 @@ impl Converter {
         self.lut.is_some()
     }
 
+    /// The table for an input colour (after brightness): none for neutrals with K-only black.
+    fn table_for(&self, rgb: [u8; 3]) -> Option<&Lut> {
+        let neutral = rgb[0] == rgb[1] && rgb[1] == rgb[2];
+        self.lut.as_ref().filter(|_| self.rich_black || !neutral)
+    }
+
+    fn tone_map(&self, rgb: [u8; 3]) -> [u8; 3] {
+        rgb.map(|v| self.tone[usize::from(v)])
+    }
+
     /// Ink amounts `[K, C, M, Y]` (65535 = every dot a large drop), after brightness and ink profile.
     pub fn amounts(&self, rgb: [u8; 3]) -> [u16; 4] {
-        let rgb = rgb.map(|v| self.tone[usize::from(v)]);
-        let base = match &self.lut {
+        let rgb = self.tone_map(rgb);
+        let base = match self.table_for(rgb) {
             Some(lut) => lut.amounts(rgb),
             None => self.provisional(rgb),
         };
@@ -325,7 +335,7 @@ impl Converter {
     /// Drop-size fractions `[small, medium, large]` per ink `[K, C, M, Y]`.
     pub fn drops(&self, rgb: [u8; 3]) -> [Drops; 4] {
         let a = self.amounts(rgb);
-        match &self.lut {
+        match self.table_for(self.tone_map(rgb)) {
             Some(lut) => std::array::from_fn(|i| lut.split(i, a[i])),
             None => a.map(amount_to_drops),
         }
@@ -615,15 +625,19 @@ mod tests {
     }
 
     #[test]
-    fn k_only_black_is_kept_when_a_table_is_installed() {
-        // tables are fitted from Windows' rich black; K-only (barcodes) must not silently use them
+    fn k_only_black_prints_neutrals_with_black_ink_and_colours_from_the_table() {
+        // tables are fitted from Windows' rich black; K-only (barcodes, text) must not use them for
+        // neutrals, but a colour logo on the same label keeps the fitted colours
         let lut = node_lut(2, |_, _, _| [[0, 0, 30000]; 4]);
         let c = JobConfig::from_cups("TmBlack=KOnly", 1).unwrap();
-        let conv = Converter::with_lut(&c.color, c.black, lut);
+        let conv = Converter::with_lut(&c.color, c.black, lut.clone());
         assert_eq!(
             conv.drops([0, 0, 0]),
             [[0, 0, 65535], [0; 3], [0; 3], [0; 3]]
         );
-        assert!(!conv.uses_table());
+        let grey = conv.drops([128, 128, 128]);
+        assert!(grey[0] != [0; 3] && grey[1..] == [[0; 3]; 3], "{grey:?}");
+        assert_eq!(conv.drops([200, 30, 30]), lut.lookup([200, 30, 30]));
+        assert!(conv.uses_table());
     }
 }

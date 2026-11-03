@@ -286,7 +286,7 @@
 *OrderDependency: 20 AnySetup *TmBlack
 *DefaultTmBlack: Rich
 *TmBlack Rich/Rich black (as Windows): ""
-*TmBlack KOnly/Black ink only: ""
+*TmBlack KOnly/Black ink only for black and greys: ""
 *CloseUI: *TmBlack
 
 *OpenUI *TmColorMode/Colour Correction: PickOne

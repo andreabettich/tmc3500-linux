@@ -446,7 +446,8 @@ pub fn fit_samples(samples: &[Sample]) -> Option<Lut> {
 /// A colour-mode table for a coating/quality that Windows was only captured with in Preferred mode:
 /// `base` (that coating/quality, Preferred) plus the mode's change measured on the reference
 /// coating/quality (`mode` − `pref`, node by node), scaled by the ratio of total ink between `base`
-/// and `pref`. Keeps the base's split curves. All three tables must share a grid.
+/// and `pref`, capped at the base's ink limit (scaled as the mode changes the reference's limit).
+/// Keeps the base's split curves. All three tables must share a grid.
 pub fn derive_mode(base: &Lut, pref: &Lut, mode: &Lut) -> Option<Lut> {
     let n = base.grid();
     if pref.grid() != n || mode.grid() != n {
@@ -466,14 +467,25 @@ pub fn derive_mode(base: &Lut, pref: &Lut, mode: &Lut) -> Option<Lut> {
             .sum()
     };
     let scale = total(base) / total(pref).max(1.0);
+    // ink limit: the base coating's densest node, raised or lowered as the mode changes the
+    // reference's densest node (clamping an ink at zero would otherwise add ink)
+    let max_total = |l: &Lut| -> f64 {
+        nodes
+            .iter()
+            .map(|&c| l.amounts(c).iter().map(|&v| f64::from(v)).sum::<f64>())
+            .fold(0.0, f64::max)
+    };
+    let limit = max_total(base) * max_total(mode) / max_total(pref).max(1.0);
     let amounts = nodes
         .iter()
         .map(|&c| {
             let (b, p, m) = (base.amounts(c), pref.amounts(c), mode.amounts(c));
-            std::array::from_fn(|i| {
-                let v = f64::from(b[i]) + scale * (f64::from(m[i]) - f64::from(p[i]));
-                v.round().clamp(0.0, 65535.0) as u16
-            })
+            let v: [f64; 4] = std::array::from_fn(|i| {
+                (f64::from(b[i]) + scale * (f64::from(m[i]) - f64::from(p[i]))).clamp(0.0, 65535.0)
+            });
+            let sum: f64 = v.iter().sum();
+            let k = if sum > limit { limit / sum } else { 1.0 };
+            v.map(|x| (x * k).round().min(65535.0) as u16)
         })
         .collect();
     Lut::new(

@@ -124,8 +124,9 @@ of every coating/quality and Matte Speed's Standard, gamma 1.8 and Off are measu
 Standard/gamma 1.8/Off tables are derived from them. A missing or unreadable table makes the filter
 fall back to provisional colours with an `INFO`/`WARNING` line in the job log.
 
-For barcodes and black text, `-o TmBlack=KOnly` prints pure black ink (the tables, like Windows,
-build black from all four inks).
+For barcodes and black text, `-o TmBlack=KOnly` prints black and greys (R = G = B) with black ink
+only; other colours on the same label still come from the table (which, like Windows, builds black
+from all four inks).
 
 Tables are rebuilt from Windows chart captures with `tools/build_colour_tables.sh <captures-dir>`
 in the source tree.
