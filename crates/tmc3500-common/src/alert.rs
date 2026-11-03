@@ -5,11 +5,13 @@
 //! Alerts are best effort and never fatal: problems are returned as warnings for the caller to log.
 use crate::time::{rfc3339, unix_now};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tmc3500_core::status::printer::{Condition, EventKind};
 
@@ -96,6 +98,11 @@ pub struct Alerter {
     pub hook_timeout: Duration,
     pub repeat_interval: Duration,
     pub state_file: Option<PathBuf>,
+    /// In-process record of sent keys: suppression keeps working when the state file cannot be
+    /// read or written (shared between clones).
+    memory: Arc<Mutex<HashMap<String, Instant>>>,
+    /// False after a failed state-file write.
+    save_ok: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -116,7 +123,13 @@ impl Alerter {
             hook_timeout,
             repeat_interval,
             state_file,
+            memory: Arc::default(),
+            save_ok: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    fn mem(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
+        self.memory.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// From the `[alerts]` config section; the state file is `<state_dir>/<state_name>`.
@@ -158,13 +171,18 @@ impl Alerter {
 
     fn save_state(&self, st: &State, warnings: &mut Vec<String>) {
         let Some(p) = &self.state_file else { return };
-        if let Err(e) = write_atomic(p, serde_json::to_string(st).unwrap_or_default().as_bytes()) {
-            warnings.push(format!("cannot write alert state {}: {e}", p.display()));
+        match write_atomic(p, serde_json::to_string(st).unwrap_or_default().as_bytes()) {
+            Ok(()) => self.save_ok.store(true, Ordering::SeqCst),
+            Err(e) => {
+                self.save_ok.store(false, Ordering::SeqCst);
+                warnings.push(format!("cannot write alert state {}: {e}", p.display()));
+            }
         }
     }
 
     /// Forget `key`, so its next occurrence is sent immediately (call when a condition clears).
     pub fn clear(&self, key: &str) -> Vec<String> {
+        self.mem().remove(key);
         let mut w = Vec::new();
         let mut st = self.load_state(&mut w);
         if st.sent.remove(key).is_some() {
@@ -177,15 +195,25 @@ impl Alerter {
     pub fn emit(&self, ev: &Event) -> Delivery {
         let mut d = Delivery::default();
         let mut st = self.load_state(&mut d.warnings);
+        // The state file decides while it works; otherwise fall back to the in-process record.
+        let file_usable = self.state_file.is_some()
+            && d.warnings.is_empty()
+            && self.save_ok.load(Ordering::SeqCst);
         let now = unix_now();
-        if let Some(&last) = st.sent.get(&ev.key) {
-            if !self.repeat_interval.is_zero()
-                && now.saturating_sub(last) < self.repeat_interval.as_secs().max(1)
-            {
+        if !self.repeat_interval.is_zero() {
+            let file_recent = st.sent.get(&ev.key).is_some_and(|&last| {
+                now.saturating_sub(last) < self.repeat_interval.as_secs().max(1)
+            });
+            let mem_recent = self
+                .mem()
+                .get(&ev.key)
+                .is_some_and(|t| t.elapsed() < self.repeat_interval);
+            if file_recent || (!file_usable && mem_recent) {
                 d.suppressed = true;
                 return d;
             }
         }
+        self.mem().insert(ev.key.clone(), Instant::now());
         st.sent.insert(ev.key.clone(), now);
         if st.sent.len() > MAX_KEYS {
             // drop the oldest entries

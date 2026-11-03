@@ -212,3 +212,30 @@ fn condition_tracker_emits_new_and_clears_gone() {
     assert_eq!(lines.len(), 2);
     assert!(lines[0].contains("\"job_id\":\"7\""));
 }
+
+#[test]
+fn repeats_are_suppressed_in_process_even_without_a_writable_state_file() {
+    // exp2 of the review: state dir missing -> every poll re-ran every hook
+    let d = tempfile::tempdir().unwrap();
+    fs::create_dir(d.path().join("alert.d")).unwrap();
+    let count = d.path().join("count");
+    hook(
+        &d.path().join("alert.d"),
+        "h",
+        &format!("echo x >> {}", count.display()),
+        0o755,
+    );
+    let a = Alerter::new(
+        d.path().join("alert.d"),
+        Duration::from_millis(500),
+        Duration::from_secs(3600),
+        Some(d.path().join("missing/alerts.json")),
+    );
+    for _ in 0..5 {
+        a.emit(&ev(EventKind::MediaOut, "media-out"));
+    }
+    assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 1);
+    a.clear("media-out");
+    a.emit(&ev(EventKind::MediaOut, "media-out"));
+    assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 2);
+}
