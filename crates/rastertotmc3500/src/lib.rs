@@ -149,13 +149,37 @@ fn run_inner<R: Read, W: Write, L: Write>(
     )
     .map_err(|e| format!("write error: {e}"))?;
     let io = |e: std::io::Error| format!("write error: {e}");
+    // Any error after the job header still closes the job (LD/JE), so the printer is never left
+    // inside an unfinished job; the error is reported afterwards.
+    let mut pages_sent = 0u32;
+    let result = write_pages(&mut rd, first, &cfg, &conv, &mut jw, log, &mut pages_sent);
+    if let Err(e) = result {
+        let _ = jw.end_set();
+        let _ = jw.finish();
+        return Err(e);
+    }
+    jw.finish().map_err(io)?;
+    let _ = writeln!(log, "INFO: {pages_sent} page(s) sent");
+    Ok(())
+}
+
+fn write_pages<R: Read, W: Write, L: Write>(
+    rd: &mut Reader<R>,
+    first: Option<PageHeader>,
+    cfg: &JobConfig,
+    conv: &Converter,
+    jw: &mut JobWriter<W>,
+    log: &mut L,
+    pages_sent: &mut u32,
+) -> Result<(), String> {
+    let io = |e: std::io::Error| format!("write error: {e}");
     let collate = cfg.collate && cfg.copies > 1;
     let mut set: Vec<Page> = Vec::new();
     let mut header = first;
     let mut n = 0u32;
     while let Some(h) = header {
         n += 1;
-        let page = render_page(&mut rd, &h, &cfg, &conv).map_err(|e| format!("page {n}: {e}"))?;
+        let page = render_page(rd, &h, cfg, conv).map_err(|e| format!("page {n}: {e}"))?;
         if collate {
             jw.page(&page).map_err(io)?;
             set.push(page);
@@ -177,8 +201,7 @@ fn run_inner<R: Read, W: Write, L: Write>(
             jw.end_set().map_err(io)?;
         }
     }
-    jw.finish().map_err(io)?;
-    let _ = writeln!(log, "INFO: {n} page(s) sent");
+    *pages_sent = n;
     Ok(())
 }
 

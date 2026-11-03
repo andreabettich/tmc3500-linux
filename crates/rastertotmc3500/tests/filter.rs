@@ -171,6 +171,30 @@ fn copies_and_collate() {
 }
 
 #[test]
+fn a_bad_page_after_good_ones_still_closes_the_job() {
+    let mut ras = raster(&[
+        page_with_image("t1_black_rect"),
+        page_with_image("t1_black_rect"),
+    ]);
+    ras.truncate(ras.len() - 1000); // page 2 ends early
+    let (code, out, err) = run(&["7", "u", "t", "1", ""], &ras);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("ERROR:"), "{err}");
+    let toks = decode(&out).expect("output must be a complete, decodable job");
+    let last: Vec<_> = toks.iter().rev().take(3).map(|t| t.kind.clone()).collect();
+    assert!(
+        matches!(
+            last[1],
+            Kind::Remote {
+                cmd: [b'J', b'E'],
+                ..
+            }
+        ),
+        "job must end with JE: {last:?}"
+    );
+}
+
+#[test]
 fn bad_input_and_options_fail_cleanly() {
     let (code, out, err) = run(&["7", "u", "t", "1", ""], b"garbage");
     assert_eq!(code, 1);
