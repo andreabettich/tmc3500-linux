@@ -178,3 +178,37 @@ fn missing_alert_dir_and_unwritable_state_are_not_fatal() {
     assert!(r.hooks.is_empty());
     assert!(!r.warnings.is_empty());
 }
+
+#[test]
+fn condition_tracker_emits_new_and_clears_gone() {
+    use tmc3500_common::alert::ConditionTracker;
+    use tmc3500_core::status::printer::Condition;
+    let (d, a) = setup();
+    let count = d.path().join("count");
+    hook(
+        &d.path().join("alert.d"),
+        "h",
+        &format!("cat >> {}", count.display()),
+        0o755,
+    );
+    let c = |k: &str| Condition {
+        event: EventKind::MediaOut,
+        key: k.into(),
+        message: "m".into(),
+    };
+    let mut t = ConditionTracker::default();
+    let ctx = |e: &mut Event| e.job_id = Some("7".into());
+    assert_eq!(t.observe(&a, &[c("media-out")], "p", "test", ctx).len(), 1);
+    // still present: suppressed, nothing new
+    t.observe(&a, &[c("media-out")], "p", "test", ctx);
+    // gone: cleared, so it alerts again when it comes back
+    t.observe(&a, &[], "p", "test", ctx);
+    t.observe(&a, &[c("media-out")], "p", "test", ctx);
+    let lines: Vec<_> = fs::read_to_string(&count)
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains("\"job_id\":\"7\""));
+}

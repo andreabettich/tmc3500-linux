@@ -11,7 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use tmc3500_core::status::printer::EventKind;
+use tmc3500_core::status::printer::{Condition, EventKind};
 
 /// Most hooks run per event.
 pub const MAX_HOOKS: usize = 64;
@@ -290,6 +290,48 @@ fn run_hook(path: &Path, ev: &Event, json: &str, timeout: Duration) -> HookOutco
             return HookOutcome::TimedOut;
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Turns successive condition snapshots into alerts: every current condition is offered to the
+/// alerter (repeat suppression decides), and the key of a condition that disappeared is cleared so
+/// it alerts immediately if it comes back.
+#[derive(Debug, Default, Clone)]
+pub struct ConditionTracker {
+    previous: Vec<String>,
+}
+
+impl ConditionTracker {
+    /// Returns the deliveries that were not suppressed.
+    pub fn observe(
+        &mut self,
+        alerter: &Alerter,
+        conditions: &[Condition],
+        printer: &str,
+        source: &str,
+        mut decorate: impl FnMut(&mut Event),
+    ) -> Vec<(Event, Delivery)> {
+        let mut out = Vec::new();
+        for c in conditions {
+            let mut ev = Event::new(c.event, &c.key, printer, &c.message, source);
+            decorate(&mut ev);
+            let d = alerter.emit(&ev);
+            if !d.suppressed {
+                out.push((ev, d));
+            }
+        }
+        for k in &self.previous {
+            if !conditions.iter().any(|c| &c.key == k) {
+                alerter.clear(k);
+            }
+        }
+        self.previous = conditions.iter().map(|c| c.key.clone()).collect();
+        out
+    }
+
+    /// Keys seen in the last snapshot.
+    pub fn current(&self) -> &[String] {
+        &self.previous
     }
 }
 
