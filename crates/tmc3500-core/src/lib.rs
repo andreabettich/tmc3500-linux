@@ -3,6 +3,7 @@
 
 pub mod color;
 pub mod cupsopts;
+pub mod cupsraster;
 pub mod decode;
 pub mod dither;
 pub mod error;
