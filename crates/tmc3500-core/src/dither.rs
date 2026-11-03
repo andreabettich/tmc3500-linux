@@ -3,7 +3,7 @@
 //! Each dot gets one of two neighbouring drop sizes, so flat areas are smooth, solids (100 %) are
 //! all large drops with no holes, and nothing is placed where the amount is zero: bar edges stay
 //! exactly where the image puts them.
-use crate::color::Converter;
+use crate::color::{amount_to_drops, Converter, Drops};
 use crate::raster::{Ink, InkPage};
 
 /// 16×16 Bayer threshold, 0..=255.
@@ -16,14 +16,25 @@ fn bayer16(x: u32, y: u32) -> u32 {
     v
 }
 
-/// Drop size (0..=3) for an ink amount at a dot position.
-pub fn level(amount: u16, x: u32, y: u32) -> u8 {
-    let v = u32::from(amount) * 3 * 256 / 65535;
-    let (lo, frac) = (v / 256, v % 256);
-    if lo >= 3 {
-        return 3;
+/// Drop size (0..=3) at a dot position for the given drop fractions: large where the threshold is
+/// below f3, medium below f3+f2, small below f3+f2+f1. Over a 16×16 tile the fractions are exact.
+pub fn level_from_drops(d: Drops, x: u32, y: u32) -> u8 {
+    let t = bayer16(x, y) * 256 + 128;
+    let (s, m, l) = (u32::from(d[0]), u32::from(d[1]), u32::from(d[2]));
+    if t < l {
+        3
+    } else if t < l + m {
+        2
+    } else if t < l + m + s {
+        1
+    } else {
+        0
     }
-    (lo + u32::from(frac > bayer16(x, y))) as u8
+}
+
+/// Drop size for an ink amount (provisional model, see [`amount_to_drops`]).
+pub fn level(amount: u16, x: u32, y: u32) -> u8 {
+    level_from_drops(amount_to_drops(amount), x, y)
 }
 
 /// Dither one row of 8-bit RGB pixels (3 bytes each) into page row `y`.
@@ -33,14 +44,18 @@ pub fn dither_row(page: &mut InkPage, y: u32, rgb: &[u8], conv: &Converter) {
         if *px == [255, 255, 255] {
             continue;
         }
-        let amounts = conv.ink(*px);
-        for (i, (&ink, &a)) in Ink::ALL.iter().zip(amounts.iter()).enumerate() {
-            if a == 0 {
+        for (i, (&ink, d)) in Ink::ALL.iter().zip(conv.drops(*px).iter()).enumerate() {
+            if *d == [0, 0, 0] {
                 continue;
             }
             // shift the matrix per ink so the inks' patterns don't coincide
             let o = 5 * i as u32;
-            page.set(ink, x as u32, y, level(a, x as u32 + o, y + 2 * o));
+            page.set(
+                ink,
+                x as u32,
+                y,
+                level_from_drops(*d, x as u32 + o, y + 2 * o),
+            );
         }
     }
 }
@@ -113,5 +128,21 @@ mod tests {
         let mut page = InkPage::new(10, 1).unwrap();
         dither_row(&mut page, 0, &[255u8; 30], &conv());
         assert!(page.is_blank());
+    }
+
+    #[test]
+    fn drop_fractions_are_reproduced_exactly_over_the_matrix() {
+        let count = |d: crate::color::Drops| {
+            let mut c = [0u32; 4];
+            for x in 0..16 {
+                for y in 0..16 {
+                    c[usize::from(level_from_drops(d, x, y))] += 1;
+                }
+            }
+            c
+        };
+        assert_eq!(count([0, 65535, 0]), [0, 0, 256, 0]);
+        assert_eq!(count([16384, 0, 32768]), [64, 64, 0, 128]);
+        assert_eq!(count([0, 0, 0]), [256, 0, 0, 0]);
     }
 }
