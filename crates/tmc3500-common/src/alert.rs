@@ -324,17 +324,25 @@ fn untrusted(md: &std::fs::Metadata, euid: u32) -> Option<String> {
 }
 
 fn run_hook(path: &Path, ev: &Event, json: &str, timeout: Duration) -> HookOutcome {
-    let mut child = match Command::new(path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .env("TMC3500_EVENT", &ev.event)
-        .env("TMC3500_EVENT_KEY", &ev.key)
-        .env("TMC3500_SEVERITY", &ev.severity)
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return HookOutcome::SpawnError(e.to_string()),
+    let mut attempt = 0;
+    let mut child = loop {
+        let r = Command::new(path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("TMC3500_EVENT", &ev.event)
+            .env("TMC3500_EVENT_KEY", &ev.key)
+            .env("TMC3500_SEVERITY", &ev.severity)
+            .spawn();
+        match r {
+            Ok(c) => break c,
+            // ETXTBSY: the hook is being written right now; retry briefly
+            Err(e) if e.raw_os_error() == Some(26) && attempt < 5 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return HookOutcome::SpawnError(e.to_string()),
+        }
     };
     if let Some(mut stdin) = child.stdin.take() {
         // The JSON is far below the pipe buffer size; a hook that does not read is fine (EPIPE).

@@ -40,15 +40,21 @@ fn run_hook(name: &str, env_file: &str, tool_var: &str) -> String {
     let d = tempfile::tempdir().unwrap();
     let rec = d.path().join("rec");
     let tool = d.path().join("tool");
-    std::fs::write(
-        &tool,
-        format!(
-            "#!/bin/sh\necho \"ARGS: $*\" > {r}\ncat >> {r}\n",
-            r = rec.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Write the fake tool from a child process: if this (multi-threaded) test process held the
+    // write fd, a concurrent fork could inherit it and exec would fail with ETXTBSY.
+    let script = format!(
+        "#!/bin/sh\necho \"ARGS: $*\" > {r}\ncat >> {r}\n",
+        r = rec.display()
+    );
+    let ok = Command::new("sh")
+        .arg("-c")
+        .arg("printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"")
+        .arg("sh")
+        .arg(&script)
+        .arg(&tool)
+        .status()
+        .unwrap();
+    assert!(ok.success());
     let envf = d.path().join("alert.env");
     std::fs::write(&envf, env_file).unwrap();
     let mut c = Command::new(packaging().join("alert.d").join(name))
@@ -80,16 +86,26 @@ fn syslog_hook() {
 
 #[test]
 fn mail_hook() {
-    assert_eq!(run_hook("60-mail", "", "SENDMAIL"), "");
+    // msmtp: an SMTP client that needs no setuid/setgid (works under NoNewPrivileges=yes)
+    assert_eq!(run_hook("60-mail", "", "MSMTP"), "");
     let r = run_hook(
         "60-mail",
         "MAIL_TO=ops@example.com\nMAIL_FROM=p@example.com\n",
-        "SENDMAIL",
+        "MSMTP",
     );
-    assert!(r.contains("ARGS: -t -i"), "{r}");
+    assert!(r.contains("ARGS: --read-envelope-from -t"), "{r}");
     assert!(r.contains("To: ops@example.com"), "{r}");
     assert!(r.contains("Subject: [tmc3500] error: media-out"), "{r}");
     assert!(r.contains("{\"event\":\"media-out\"}"), "{r}");
+}
+
+#[test]
+fn mail_hook_does_not_rely_on_setuid_sendmail() {
+    let hook = std::fs::read_to_string(packaging().join("alert.d/60-mail")).unwrap();
+    assert!(!hook.contains("/usr/sbin/sendmail"));
+    let unit =
+        std::fs::read_to_string(packaging().join("systemd/tmc3500-monitor.service")).unwrap();
+    assert!(!unit.contains("postfix"));
 }
 
 #[test]

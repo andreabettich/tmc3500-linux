@@ -1,9 +1,17 @@
 #!/bin/sh
-# tmc3500 alert hook: send the event by mail through the local MTA (sendmail -t).
+# tmc3500 alert hook: send the event by mail with msmtp (an SMTP client, `apt install msmtp`).
+# msmtp needs no setuid/setgid helper, so it works under the hardened tmc3500-monitor unit
+# (NoNewPrivileges=yes); the MTA's sendmail(1) usually does not (setgid postdrop / setuid).
 # Disabled unless MAIL_TO is set in /etc/tmc3500/alert.env (KEY=value lines; not sourced):
 #   MAIL_TO=ops@example.com
 #   MAIL_FROM=tmc3500@printhost.example.com
-# Under the hardened tmc3500-monitor unit, Postfix needs ReadWritePaths=/var/spool/postfix/maildrop.
+# SMTP relay settings go in /etc/msmtprc (system-wide, readable by lp and tmc3500), e.g.
+#   account default
+#   host smtp.example.com
+#   port 587
+#   tls on
+#   from tmc3500@printhost.example.com
+# With the monitor's IPAddressAllow drop-in, also allow the relay's address.
 set -u
 env_file=${TMC3500_ALERT_ENV:-/etc/tmc3500/alert.env}
 MAIL_TO=; MAIL_FROM=
@@ -28,4 +36,4 @@ json=$(head -c 65536)
     printf 'Subject: [tmc3500] %s: %s\n' "$severity" "$event"
     printf 'Content-Type: text/plain; charset=utf-8\n\n'
     printf '%s\n' "$json"
-} | "${SENDMAIL:-/usr/sbin/sendmail}" -t -i
+} | "${MSMTP:-msmtp}" --read-envelope-from -t
