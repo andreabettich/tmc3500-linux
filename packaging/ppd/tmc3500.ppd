@@ -316,17 +316,17 @@
 *TmInkBkCMY -6/-6: ""
 *CloseUI: *TmInkBkCMY
 
-*OpenUI *TmInkBk/Ink Amount Black (K): PickOne
-*OrderDependency: 20 AnySetup *TmInkBk
-*DefaultTmInkBk: 0
-*TmInkBk 0/0: ""
-*TmInkBk -1/-1: ""
-*TmInkBk -2/-2: ""
-*TmInkBk -3/-3: ""
-*TmInkBk -4/-4: ""
-*TmInkBk -5/-5: ""
-*TmInkBk -6/-6: ""
-*CloseUI: *TmInkBk
+*OpenUI *TmInkK/Ink Amount Black (K ink): PickOne
+*OrderDependency: 20 AnySetup *TmInkK
+*DefaultTmInkK: 0
+*TmInkK 0/0: ""
+*TmInkK -1/-1: ""
+*TmInkK -2/-2: ""
+*TmInkK -3/-3: ""
+*TmInkK -4/-4: ""
+*TmInkK -5/-5: ""
+*TmInkK -6/-6: ""
+*CloseUI: *TmInkK
 
 *OpenUI *TmBrightness/Brightness: PickOne
 *OrderDependency: 20 AnySetup *TmBrightness

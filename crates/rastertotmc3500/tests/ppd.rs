@@ -58,7 +58,7 @@ const DRIVER_KEYS: &[&str] = &[
     "TmColorMode",
     "TmGamma",
     "TmInkBkCMY",
-    "TmInkBk",
+    "TmInkK",
     "TmBrightness",
 ];
 

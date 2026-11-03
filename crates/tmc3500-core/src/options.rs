@@ -465,7 +465,7 @@ impl JobConfig {
                 }
                 "TmInkAdjust" => c.color.ink_adjust = parse_bool(k, v)?,
                 "TmInkBkCMY" => c.color.ink_bkcmy = parse_int(k, v, -6, 0)? as i8,
-                "TmInkBk" => c.color.ink_bk = parse_int(k, v, -6, 0)? as i8,
+                "TmInkK" => c.color.ink_bk = parse_int(k, v, -6, 0)? as i8,
                 "TmBrightness" => c.color.brightness = parse_int(k, v, -2, 2)? as i8,
                 "Collate" => c.collate = parse_bool(k, v)?,
                 other if other.starts_with("Tm") => {
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn parses_position_and_color_options() {
-        let c = cfg("TmPosAdjV=0.50in TmPosAdjH=-0.25 TmColorMode=Off TmGamma=1.8 TmInkAdjust=True TmInkBkCMY=-3 TmInkBk=-6 TmBrightness=2 TmBlack=KOnly");
+        let c = cfg("TmPosAdjV=0.50in TmPosAdjH=-0.25 TmColorMode=Off TmGamma=1.8 TmInkAdjust=True TmInkBkCMY=-3 TmInkK=-6 TmBrightness=2 TmBlack=KOnly");
         assert_eq!((c.pos_adj_v, c.pos_adj_h), (127, -64));
         assert_eq!(
             c.color,
@@ -688,7 +688,7 @@ mod tests {
             Err(OptError::OutOfRange { .. })
         ));
         assert!(matches!(
-            JobConfig::from_cups("TmInkBk=1", 1),
+            JobConfig::from_cups("TmInkK=1", 1),
             Err(OptError::OutOfRange { .. })
         ));
     }

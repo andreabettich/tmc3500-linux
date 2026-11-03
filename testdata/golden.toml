@@ -67,8 +67,8 @@
 "403_inkprofile_on" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True" }
 "404_inkprofile_bkcmy_-3" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBkCMY=-3" }
 "405_inkprofile_bkcmy_-6" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBkCMY=-6" }
-"406_inkprofile_bk_-3" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBk=-3" }
-"407_inkprofile_bk_-6" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBk=-6" }
+"406_inkprofile_bk_-3" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkK=-3" }
+"407_inkprofile_bk_-6" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkK=-6" }
 "408_brightness_-2" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmBrightness=-2" }
 "409_brightness_+2" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmBrightness=2" }
 "410_bidirectional_off" = { options = "PageSize=Custom.4.25x6.88in TmBidirectional=False" }
