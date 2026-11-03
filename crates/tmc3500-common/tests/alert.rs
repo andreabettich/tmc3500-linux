@@ -311,3 +311,56 @@ fn alert_state_file_is_group_writable_for_the_shared_state_dir() {
         .mode();
     assert_eq!(m & 0o777, 0o660);
 }
+
+#[test]
+fn state_updates_wait_for_the_directory_lock() {
+    let (d, a) = setup();
+    let dir = fs::File::open(d.path().join("state")).unwrap();
+    dir.lock().unwrap();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        dir.unlock().unwrap();
+    });
+    let start = Instant::now();
+    let r = a.emit(&ev(EventKind::MediaOut, "media-out"));
+    assert!(!r.suppressed);
+    assert!(
+        start.elapsed() >= Duration::from_millis(250),
+        "{:?}",
+        start.elapsed()
+    );
+    t.join().unwrap();
+}
+
+#[test]
+fn hook_timeout_kills_the_whole_process_group() {
+    let (d, a) = setup();
+    let pidfile = d.path().join("grandchild.pid");
+    hook(
+        &d.path().join("alert.d"),
+        "spawner",
+        &format!("sleep 30 &\necho $! > {}\nsleep 30", pidfile.display()),
+        0o755,
+    );
+    let r = a.emit(&ev(EventKind::MediaJam, "media-jam"));
+    assert_eq!(r.hooks[0].outcome, HookOutcome::TimedOut);
+    let pid = fs::read_to_string(&pidfile).unwrap().trim().to_string();
+    let gone = || {
+        match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => true,
+            // a zombie waiting for its (re)parent is dead too
+            Ok(s) => s
+                .rsplit(')')
+                .next()
+                .is_some_and(|r| r.trim_start().starts_with('Z')),
+        }
+    };
+    let t = Instant::now();
+    while !gone() {
+        assert!(
+            t.elapsed() < Duration::from_secs(2),
+            "grandchild {pid} survived"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

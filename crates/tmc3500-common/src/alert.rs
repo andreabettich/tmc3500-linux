@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -184,10 +185,34 @@ impl Alerter {
         }
     }
 
+    /// Exclusive lock on the state directory (flock on the directory fd), so the backend and the
+    /// monitor do not lose each other's updates. Waits up to 2 s, then proceeds unlocked.
+    fn lock_state(&self, warnings: &mut Vec<String>) -> Option<std::fs::File> {
+        let dir = self.state_file.as_ref()?.parent()?;
+        let f = std::fs::File::open(dir).ok()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match f.try_lock() {
+                Ok(()) => return Some(f),
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    warnings.push(format!(
+                        "cannot lock alert state dir {}: {e}; continuing unlocked",
+                        dir.display()
+                    ));
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Forget `key`, so its next occurrence is sent immediately (call when a condition clears).
     pub fn clear(&self, key: &str) -> Vec<String> {
         self.mem().remove(key);
         let mut w = Vec::new();
+        let _lock = self.lock_state(&mut w);
         let mut st = self.load_state(&mut w);
         if st.sent.remove(key).is_some() {
             self.save_state(&st, &mut w);
@@ -198,6 +223,7 @@ impl Alerter {
     /// Send `ev` to every hook unless the same key was sent within the repeat interval.
     pub fn emit(&self, ev: &Event) -> Delivery {
         let mut d = Delivery::default();
+        let lock = self.lock_state(&mut d.warnings);
         let mut st = self.load_state(&mut d.warnings);
         // The state file decides while it works; otherwise fall back to the in-process record.
         let file_usable = self.state_file.is_some()
@@ -228,6 +254,7 @@ impl Alerter {
             }
         }
         self.save_state(&st, &mut d.warnings);
+        drop(lock);
         let json = ev.to_json();
         for hook in self.hooks(&mut d.warnings) {
             let outcome = run_hook(&hook, ev, &json, self.hook_timeout);
@@ -327,6 +354,7 @@ fn run_hook(path: &Path, ev: &Event, json: &str, timeout: Duration) -> HookOutco
     let mut attempt = 0;
     let mut child = loop {
         let r = Command::new(path)
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -363,6 +391,12 @@ fn run_hook(path: &Path, ev: &Event, json: &str, timeout: Duration) -> HookOutco
             Err(e) => return HookOutcome::SpawnError(e.to_string()),
         }
         if Instant::now() >= deadline {
+            // the hook leads its own process group: kill everything it started
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
             let _ = child.kill();
             let _ = child.wait();
             return HookOutcome::TimedOut;
