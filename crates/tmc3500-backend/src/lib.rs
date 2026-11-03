@@ -391,7 +391,9 @@ impl Backend {
         Err(last)
     }
 
-    fn connect(&mut self, start: Instant) -> Result<TcpStream, ConnectError> {
+    /// Connect with retries. The unreachable limit counts from the first failed attempt
+    /// (`first_fail`), not from the start of the job: waiting for paper does not use it up.
+    fn connect(&mut self, first_fail: &mut Option<Instant>) -> Result<TcpStream, ConnectError> {
         let bc = self.cfg.backend.clone();
         let mut attempt = 0u32;
         loop {
@@ -405,7 +407,7 @@ impl Backend {
                     return Ok(s);
                 }
                 Err(e) => {
-                    let elapsed = start.elapsed();
+                    let elapsed = first_fail.get_or_insert_with(Instant::now).elapsed();
                     let limit = bc.unreachable_hold_after();
                     if elapsed >= limit {
                         return Err(ConnectError::Unreachable(e));
@@ -722,13 +724,13 @@ impl Backend {
 
     /// Deliver one copy. `Err` carries the exit code.
     fn deliver(&mut self, mut input: Box<dyn Read>) -> Result<u64, i32> {
-        let start = Instant::now();
+        let mut first_fail: Option<Instant> = None;
         let mut pending: Vec<u8> = Vec::new();
         loop {
             if !self.wait_until_ready() {
                 return Err(self.cancelled_exit(0));
             }
-            let mut stream = match self.connect(start) {
+            let mut stream = match self.connect(&mut first_fail) {
                 Ok(s) => s,
                 Err(ConnectError::Cancelled) => return Err(self.cancelled_exit(0)),
                 Err(ConnectError::Unreachable(e)) => {
@@ -781,7 +783,9 @@ impl Backend {
                     if self.sleep(self.cfg.backend.retry_initial()) {
                         return Err(self.cancelled_exit(0));
                     }
-                    if start.elapsed() >= self.cfg.backend.unreachable_hold_after() {
+                    if first_fail.get_or_insert_with(Instant::now).elapsed()
+                        >= self.cfg.backend.unreachable_hold_after()
+                    {
                         if self.prior > 0 {
                             self.mark_partial(0, "printer keeps closing the connection");
                         }

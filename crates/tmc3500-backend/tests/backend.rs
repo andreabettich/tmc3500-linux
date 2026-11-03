@@ -699,3 +699,34 @@ fn hold_after_everything_was_delivered_says_so() {
         r.stderr
     );
 }
+
+#[test]
+fn unreachable_limit_counts_from_the_first_failed_connect() {
+    // a long wait for the printer (cover open) must not use up the unreachable budget
+    let h = H::new(&capture("000_default_t1.prn"));
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    h.fake.set_cover_open(true);
+    let uri = format!(
+        "tmc3500://127.0.0.1:{port}?snmp-port={}",
+        h.fake.snmp_port()
+    );
+    let t = Instant::now();
+    let child = h.spawn_file(&uri);
+    std::thread::sleep(Duration::from_millis(900));
+    h.fake.set_cover_open(false);
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    let retries = r
+        .stderr
+        .lines()
+        .filter(|l| l.contains("retrying in"))
+        .count();
+    assert!(retries >= 3, "{}", r.stderr);
+    assert!(
+        t.elapsed() >= Duration::from_millis(1400),
+        "{:?}",
+        t.elapsed()
+    );
+}
