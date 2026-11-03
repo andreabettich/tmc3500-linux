@@ -1,0 +1,90 @@
+# CUPS options that reproduce each Windows capture (see testdata/captures/NOTES.md).
+# skip = reason → excluded with that reason. copies overrides manifest.csv (driver-dialog copies).
+
+[captures]
+"000_default_t1" = {}
+"001_default_t1_again" = {}
+"002_default_t2" = {}
+"003_default_t3" = {}
+"004_default_t4_blank" = {}
+"005_default_t1_copies3" = {}
+"006_default_t1_pages2" = {}
+"100_orient_landscape" = { options = "orientation-requested=4" }
+"101_rotate180_on" = { options = "TmRotate180=True" }
+"102_copies3_dialog" = { copies = 3 }
+"103_collate_on" = { options = "Collate=True" }
+"104_collate_on_copies3" = { options = "Collate=True", copies = 3 }
+"105_reverse_order_pages2" = { options = "outputorder=reverse" }
+"106_posadj_vert_+0.50" = { options = "TmPosAdjV=0.50in" }
+"107_posadj_vert_-0.25" = { options = "TmPosAdjV=-0.25in" }
+"108_posadj_horiz_+0.50" = { options = "TmPosAdjH=0.50in" }
+"109_posadj_horiz_-0.25" = { options = "TmPosAdjH=-0.25in" }
+"110_borderless_off" = { options = "TmBorderless=False" }
+"111_borderless_off_t3" = { options = "TmBorderless=False" }
+"200_notify_beep_page" = { options = "TmNotify=PageEnd" }
+"201_notify_beep_job" = { options = "TmNotify=JobEnd" }
+"202_print_preview_on" = {}
+"210_media_custom_t1" = { options = "PageSize=Custom.4.25x6.88in" }
+"211_media_custom_t3" = { options = "PageSize=Custom.4.25x6.88in" }
+"301_form_blackmark_label" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=DieCutBlackMark" }
+"302_form_continuous_label" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel" }
+"303_form_continuous_paper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper" }
+"304_form_continuous_paper_blackmark" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaperBlackMark" }
+"305_save_lower_contlabel" = { skip = "phase 2: media-saving length depends on printed area" }
+"306_save_lowerupper_contlabel" = { skip = "phase 2: media-saving length depends on printed area" }
+"307_save_lower_contpaper" = { skip = "phase 2: media-saving length depends on printed area" }
+"308_save_lowerupper_contpaper" = { skip = "phase 2: media-saving length depends on printed area" }
+"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain" }
+"311_coating_synthetic" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Synthetic" }
+"312_coating_wristband" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Wristband" }
+"313_coating_glossy" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Glossy" }
+"314_quality_matte_mode1" = { options = "PageSize=Custom.4.25x6.88in TmQuality=Quality1" }
+"315_quality_matte_mode2" = { options = "PageSize=Custom.4.25x6.88in TmQuality=Quality2" }
+"316_quality_synthetic_mode1" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Synthetic TmQuality=Quality1" }
+"317_quality_synthetic_mode2" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Synthetic TmQuality=Quality2" }
+"318_quality_wristband_mode1" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Wristband TmQuality=Quality1" }
+"319_quality_glossy_mode1" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Glossy TmQuality=Quality1" }
+"320_quality_glossy_mode2" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Glossy TmQuality=Quality2" }
+"321_autocut_last_page" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=CutLastPage" }
+"322_autocut_every_n1" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=CutEveryN TmCutInterval=1" }
+"323_autocut_every_n2_pages6" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=CutEveryN TmCutInterval=2" }
+"324_autocut_every_n5_pages6" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=CutEveryN TmCutInterval=5" }
+"325_nocut_peel_off" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=PeelOff" }
+"326_nocut_cut_position" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=CutPosition" }
+"327_nocut_print_end" = { options = "PageSize=Custom.4.25x6.88in TmAfterPrint=PrintEnd" }
+"328_autocut_default_pages2" = { options = "PageSize=Custom.4.25x6.88in" }
+"330_size_width_2.00" = { options = "PageSize=Custom.2.00x6.88in" }
+"331_size_length_3.00" = { options = "PageSize=Custom.4.25x3.00in" }
+"332_size_50x30mm" = { options = "PageSize=Custom.1.97x1.18in" }
+"333_size_102x152mm" = { options = "PageSize=Custom.4.02x5.98in" }
+"334_size_min_1.00x0.31" = { options = "PageSize=Custom.1.00x0.31in" }
+"335_size_length_12.00" = { options = "PageSize=Custom.4.25x12.00in" }
+"340_named_media_50x30mm" = { options = "PageSize=Custom.1.97x1.18in" }
+"400_color_disable_correction" = { options = "PageSize=Custom.4.25x6.88in TmColorMode=Off" }
+"401_color_mode_epson_standard" = { options = "PageSize=Custom.4.25x6.88in TmColorMode=Standard" }
+"402_gamma_1.8" = { options = "PageSize=Custom.4.25x6.88in TmGamma=1.8" }
+"403_inkprofile_on" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True" }
+"404_inkprofile_bkcmy_-3" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBkCMY=-3" }
+"405_inkprofile_bkcmy_-6" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBkCMY=-6" }
+"406_inkprofile_bk_-3" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBk=-3" }
+"407_inkprofile_bk_-6" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmInkBk=-6" }
+"408_brightness_-2" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmBrightness=-2" }
+"409_brightness_+2" = { options = "PageSize=Custom.4.25x6.88in TmInkAdjust=True TmBrightness=2" }
+"410_bidirectional_off" = { options = "PageSize=Custom.4.25x6.88in TmBidirectional=False" }
+"411_banding_reduction_off" = { options = "PageSize=Custom.4.25x6.88in TmBandingReduction=False" }
+"500_hscopy_off_copies3" = {}
+"501_hscopy_off" = {}
+"502_always_spool_raw" = {}
+"503_print_as_bitmap_t3" = {}
+"504_skip_blank_page_t4" = { options = "TmSkipBlank=True" }
+"505_skip_blank_page_t1" = { options = "TmSkipBlank=True" }
+"506_join_barcodes_off" = {}
+"507_units_mm" = {}
+"508_status_monitor_on" = {}
+"600_reduction_fit" = { options = "fit-to-page=true" }
+"601_reduction_custom_50pct" = { options = "scaling=50" }
+"602_reduction_fit_before_8.27x11.69" = { options = "fit-to-page=true" }
+"610_vacuum_manual_default9" = { options = "TmVacuum=9" }
+"611_vacuum_manual_4" = { options = "TmVacuum=4" }
+"612_vacuum_manual_0" = { options = "TmVacuum=0" }
+"900_default_t1_logged" = {}

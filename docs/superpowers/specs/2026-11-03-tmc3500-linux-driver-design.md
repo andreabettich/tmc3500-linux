@@ -185,7 +185,7 @@ Verified from the captures. All lengths are in 1/360 in unless stated otherwise.
 Still to be confirmed:
 - **The 6-byte `JH` id:** probably a host or driver instance id. Generate a fixed id per installation;
   check on the real printer.
-- **504 skip-blank:** 44 differing bytes, not yet analysed.
+- **504 skip-blank:** resolved in phase 1. A skipped blank page still gets its page-setup commands (`ESC(G` … `ESC(e`); only its raster and form feed are left out (504 is 1 byte shorter than 004). Multi-page behaviour is extrapolated from this single-page capture; check it on the real printer.
 - **Nozzle row split and pass layout:** to be confirmed against every capture in phase 2.
 
 ## 4. Colour and barcode quality

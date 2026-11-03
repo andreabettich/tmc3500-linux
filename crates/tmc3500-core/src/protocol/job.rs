@@ -81,10 +81,9 @@ pub fn encode_job(cfg: &JobConfig, meta: &JobMeta, pages: &[Page]) -> Vec<u8> {
         w.paren(b'd', &[0u8; 32767]);
     }
 
-    let printable: Vec<&Page> = pages
-        .iter()
-        .filter(|p| !(cfg.skip_blank && p.blank))
-        .collect();
+    // Skip Blank Page: Windows still sends a skipped page's setup commands but omits its raster
+    // and form feed (capture 504 vs 004).
+    let printable: Vec<&Page> = pages.iter().collect();
     let copies = usize::from(cfg.copies.max(1));
     let sets: Vec<Vec<&Page>> = if cfg.collate && copies > 1 {
         vec![printable.clone(); copies]
@@ -150,8 +149,10 @@ pub fn encode_job(cfg: &JobConfig, meta: &JobMeta, pages: &[Page]) -> Vec<u8> {
             w.paren(b'D', &[0x40, 0x38, 0x50, 0x28]);
             w.paren(b'm', &[mode]);
             w.paren(b'e', &[0, e]);
-            w.bytes(&page.raster);
-            w.bytes(&[0x0c]);
+            if !(cfg.skip_blank && page.blank) {
+                w.bytes(&page.raster);
+                w.bytes(&[0x0c]);
+            }
         }
 
         w.init();
@@ -271,6 +272,52 @@ mod tests {
         let c3c = JobConfig::from_cups("Collate=True", 3).unwrap();
         let b = encode_job(&c3c, &meta(), &[page(), page()]);
         assert_eq!((count(&b, "PM"), count(&b, "LD")), (3, 4));
+    }
+
+    #[test]
+    fn skipped_blank_page_keeps_setup_but_drops_raster_and_form_feed() {
+        // Capture 504 vs 004: Windows still sends the page setup (ESC(G .. ESC(e) for a skipped
+        // blank page and omits only its raster and FF.
+        let c = JobConfig::from_cups("TmSkipBlank=True", 1).unwrap();
+        let b = encode_job(
+            &c,
+            &meta(),
+            &[Page {
+                raster: vec![0xaa],
+                blank: true,
+            }],
+        );
+        let toks = decode(&b).unwrap();
+        assert!(toks
+            .iter()
+            .any(|t| matches!(t.kind, Kind::Paren { cmd: b'C', .. })));
+        assert!(toks
+            .iter()
+            .any(|t| matches!(t.kind, Kind::Paren { cmd: b'e', .. })));
+        assert_eq!(form_feeds(&b), 0);
+        assert!(!b.contains(&0xaa));
+        let without = JobConfig::from_cups("", 1).unwrap();
+        let full = encode_job(
+            &without,
+            &meta(),
+            &[Page {
+                raster: vec![],
+                blank: true,
+            }],
+        );
+        assert_eq!(
+            full.len(),
+            encode_job(
+                &c,
+                &meta(),
+                &[Page {
+                    raster: vec![],
+                    blank: true
+                }]
+            )
+            .len()
+                + 1
+        );
     }
 
     #[test]
