@@ -63,6 +63,11 @@ impl Oid {
         Ok(Oid(v))
     }
 
+    /// `0.0`, the null OID.
+    pub fn zero_dot_zero() -> Oid {
+        Oid(vec![0, 0])
+    }
+
     pub fn as_slice(&self) -> &[u32] {
         &self.0
     }
