@@ -13,6 +13,7 @@ pub mod options;
 pub mod pipeline;
 pub mod protocol;
 pub mod raster;
+pub mod reassemble;
 pub mod rle;
 pub mod units;
 pub mod weave;
