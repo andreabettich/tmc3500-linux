@@ -134,7 +134,8 @@ fn command_skeleton_matches_windows_byte_for_byte() {
         let pages = vec![
             Page {
                 raster: vec![],
-                blank
+                blank,
+                length: None,
             };
             row.pages
         ];

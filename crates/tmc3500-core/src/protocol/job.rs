@@ -1,8 +1,9 @@
 //! Whole-job encoder.
 use super::sn::sn_payload;
 use super::writer::Writer;
-use crate::geometry::geometry;
+use crate::geometry::{geometry, Geometry};
 use crate::options::{AfterPrint, JobConfig, Notify, Quality};
+use std::io::{self, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JobMeta {
@@ -24,6 +25,8 @@ pub struct Page {
     pub raster: Vec<u8>,
     /// True if the page has no ink at all (for Skip Blank Page).
     pub blank: bool,
+    /// Page length in dots when Media Saving shortened it (continuous forms only).
+    pub length: Option<u32>,
 }
 
 fn block_start(w: &mut Writer) {
@@ -34,82 +37,73 @@ fn block_start(w: &mut Writer) {
     w.remote_enter();
 }
 
-pub fn encode_job(cfg: &JobConfig, meta: &JobMeta, pages: &[Page]) -> Vec<u8> {
-    let g = geometry(cfg);
-    let mut w = Writer::new();
+/// Streaming job encoder. Call `page` for every page of a set, `end_set` after each set (one set
+/// unless collated copies), then `finish`. Output goes to `out` as it is produced.
+pub struct JobWriter<W: Write> {
+    out: W,
+    cfg: JobConfig,
+    g: Geometry,
+    sn: [u8; 26],
+    set_open: bool,
+    pages_in_set: usize,
+    sets: usize,
+}
 
-    block_start(&mut w);
-    w.remote(b"EX", &[0, 0, 0, 0, 0x24, cfg.form.ex24_code()]);
-    w.remote(b"SV", &[]);
-    w.remote(
-        b"EX",
-        &[
-            0,
-            0,
-            0,
-            0,
-            0x27,
-            0x02,
-            if cfg.after_print.is_cut() { 2 } else { 1 },
-        ],
-    );
-    w.remote_exit();
+impl<W: Write> JobWriter<W> {
+    /// Write the job header (pre-job block, job-start block, padding).
+    pub fn begin(mut out: W, cfg: &JobConfig, meta: &JobMeta) -> io::Result<Self> {
+        let g = geometry(cfg);
+        let mut w = Writer::new();
+        block_start(&mut w);
+        w.remote(b"EX", &[0, 0, 0, 0, 0x24, cfg.form.ex24_code()]);
+        w.remote(b"SV", &[]);
+        let cut = if cfg.after_print.is_cut() { 2 } else { 1 };
+        w.remote(b"EX", &[0, 0, 0, 0, 0x27, 0x02, cut]);
+        w.remote_exit();
 
-    block_start(&mut w);
-    let [yh, yl] = meta.year.to_be_bytes();
-    w.remote(
-        b"TI",
-        &[
-            0,
-            yh,
-            yl,
-            meta.month,
-            meta.day,
-            meta.hour,
-            meta.minute,
-            meta.second,
-        ],
-    );
-    w.remote(b"JS", &[0, 0, 0, 0]);
-    let mut jh = vec![0x00, 0x01];
-    jh.extend_from_slice(&meta.job_id.to_le_bytes());
-    jh.extend_from_slice(&meta.host_id);
-    w.remote(b"JH", &jh);
-    w.remote_exit();
-
-    for _ in 0..2 {
-        w.paren(b'd', &[0u8; 32767]);
+        block_start(&mut w);
+        let [yh, yl] = meta.year.to_be_bytes();
+        w.remote(
+            b"TI",
+            &[
+                0,
+                yh,
+                yl,
+                meta.month,
+                meta.day,
+                meta.hour,
+                meta.minute,
+                meta.second,
+            ],
+        );
+        w.remote(b"JS", &[0, 0, 0, 0]);
+        let mut jh = vec![0x00, 0x01];
+        jh.extend_from_slice(&meta.job_id.to_le_bytes());
+        jh.extend_from_slice(&meta.host_id);
+        w.remote(b"JH", &jh);
+        w.remote_exit();
+        for _ in 0..2 {
+            w.paren(b'd', &[0u8; 32767]);
+        }
+        out.write_all(&w.into_bytes())?;
+        Ok(Self {
+            out,
+            cfg: cfg.clone(),
+            g,
+            sn: sn_payload(&g, cfg),
+            set_open: false,
+            pages_in_set: 0,
+            sets: 0,
+        })
     }
 
-    // Skip Blank Page: Windows still sends a skipped page's setup commands but omits its raster
-    // and form feed (capture 504 vs 004).
-    let printable: Vec<&Page> = pages.iter().collect();
-    let copies = usize::from(cfg.copies.max(1));
-    let sets: Vec<Vec<&Page>> = if cfg.collate && copies > 1 {
-        vec![printable.clone(); copies]
-    } else {
-        vec![printable
-            .iter()
-            .flat_map(|p| std::iter::repeat_n(*p, copies))
-            .collect()]
-    };
-
-    let (v, q, e) = match cfg.quality {
-        Quality::Speed => (4u8, 0u8, 0x11u8),
-        Quality::Quality1 | Quality::Quality2 => (2, 1, 0x14),
-    };
-    let mode = match cfg.quality {
-        Quality::Speed => 0x20 | u8::from(cfg.banding_reduction),
-        Quality::Quality1 => 0x41,
-        Quality::Quality2 => 0x45,
-    } | if cfg.borderless { 0x02 } else { 0 };
-    let sn = sn_payload(&g, cfg);
-
-    for (si, set) in sets.iter().enumerate() {
+    fn open_set(&mut self) -> io::Result<()> {
+        let cfg = &self.cfg;
+        let mut w = Writer::new();
         block_start(&mut w);
         w.remote(b"PM", &[0, 0]);
         w.remote(b"EX", &[0, 0, 0, 0, 0x2d, 0x01]);
-        w.remote(b"SN", &sn);
+        w.remote(b"SN", &self.sn);
         match cfg.notify {
             Notify::None => {}
             Notify::JobEnd => w.remote(b"BB", &[0, 1, 0, 0, 0]),
@@ -130,44 +124,116 @@ pub fn encode_job(cfg: &JobConfig, meta: &JobMeta, pages: &[Page]) -> Vec<u8> {
             AfterPrint::PrintEnd => w.remote(b"EX", &[0, 0, 0, 0, 0x25, 0]),
         }
         w.remote_exit();
+        self.out.write_all(&w.into_bytes())?;
+        self.set_open = true;
+        self.pages_in_set = 0;
+        Ok(())
+    }
 
-        for (pi, page) in set.iter().enumerate() {
-            if pi == 0 {
-                w.paren(b'G', &[1]);
-                w.paren(b'U', &[4, 4, v, 0xa0, 0x05]);
-                w.short(b'U', u8::from(!cfg.bidirectional));
-                w.paren(b'i', &[q]);
-            }
-            w.paren(b'C', &g.page_length.to_le_bytes());
-            let mut s = g.width.to_le_bytes().to_vec();
-            s.extend_from_slice(&g.height.to_le_bytes());
-            w.paren(b'S', &s);
-            w.paren(b'l', &g.left.to_le_bytes());
-            let mut c = g.top.to_le_bytes().to_vec();
-            c.extend_from_slice(&g.bottom.to_le_bytes());
-            w.paren(b'c', &c);
-            w.paren(b'D', &[0x40, 0x38, 0x50, 0x28]);
-            w.paren(b'm', &[mode]);
-            w.paren(b'e', &[0, e]);
-            if !(cfg.skip_blank && page.blank) {
-                w.bytes(&page.raster);
-                w.bytes(&[0x0c]);
-            }
+    /// Write one page (opening a set first if needed).
+    pub fn page(&mut self, page: &Page) -> io::Result<()> {
+        if !self.set_open {
+            self.open_set()?;
         }
+        let cfg = &self.cfg;
+        let g = &self.g;
+        let (v, q, e) = match cfg.quality {
+            Quality::Speed => (4u8, 0u8, 0x11u8),
+            Quality::Quality1 | Quality::Quality2 => (2, 1, 0x14),
+        };
+        let mode = match cfg.quality {
+            Quality::Speed => 0x20 | u8::from(cfg.banding_reduction),
+            Quality::Quality1 => 0x41,
+            Quality::Quality2 => 0x45,
+        } | if cfg.borderless { 0x02 } else { 0 };
+        let (page_length, height, bottom) = match page.length {
+            None => (g.page_length, g.height, g.bottom),
+            Some(l) => (l, l, l.saturating_sub(if cfg.borderless { 0 } else { 21 })),
+        };
+        let mut w = Writer::new();
+        if self.pages_in_set == 0 {
+            w.paren(b'G', &[1]);
+            w.paren(b'U', &[4, 4, v, 0xa0, 0x05]);
+            w.short(b'U', u8::from(!cfg.bidirectional));
+            w.paren(b'i', &[q]);
+        }
+        w.paren(b'C', &page_length.to_le_bytes());
+        let mut s = g.width.to_le_bytes().to_vec();
+        s.extend_from_slice(&height.to_le_bytes());
+        w.paren(b'S', &s);
+        w.paren(b'l', &g.left.to_le_bytes());
+        let mut c = g.top.to_le_bytes().to_vec();
+        c.extend_from_slice(&bottom.to_le_bytes());
+        w.paren(b'c', &c);
+        w.paren(b'D', &[0x40, 0x38, 0x50, 0x28]);
+        w.paren(b'm', &[mode]);
+        w.paren(b'e', &[0, e]);
+        self.out.write_all(&w.into_bytes())?;
+        // Skip Blank Page: Windows still sends a skipped page's setup commands but omits its raster
+        // and form feed (capture 504 vs 004).
+        if !(cfg.skip_blank && page.blank) {
+            self.out.write_all(&page.raster)?;
+            self.out.write_all(&[0x0c])?;
+        }
+        self.pages_in_set += 1;
+        Ok(())
+    }
 
-        w.init();
-        w.remote_enter();
-        w.remote(b"LD", &[]);
-        if si + 1 == sets.len() {
-            w.remote_exit();
+    /// Close the current set (no-op if none is open).
+    pub fn end_set(&mut self) -> io::Result<()> {
+        if self.set_open {
+            let mut w = Writer::new();
             w.init();
             w.remote_enter();
             w.remote(b"LD", &[]);
-            w.remote(b"JE", &[0]);
+            w.remote_exit();
+            self.out.write_all(&w.into_bytes())?;
+            self.set_open = false;
+            self.sets += 1;
         }
-        w.remote_exit();
+        Ok(())
     }
-    w.into_bytes()
+
+    /// Close the job. A job without any page still gets one (empty) set, as Windows does.
+    pub fn finish(mut self) -> io::Result<W> {
+        if self.sets == 0 && !self.set_open {
+            self.open_set()?;
+        }
+        self.end_set()?;
+        let mut w = Writer::new();
+        w.init();
+        w.remote_enter();
+        w.remote(b"LD", &[]);
+        w.remote(b"JE", &[0]);
+        w.remote_exit();
+        self.out.write_all(&w.into_bytes())?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
+}
+
+/// Encode a whole job in memory: copies and collation are expanded here.
+pub fn encode_job(cfg: &JobConfig, meta: &JobMeta, pages: &[Page]) -> Vec<u8> {
+    let copies = usize::from(cfg.copies.max(1));
+    let run = || -> io::Result<Vec<u8>> {
+        let mut jw = JobWriter::begin(Vec::new(), cfg, meta)?;
+        if cfg.collate && copies > 1 {
+            for _ in 0..copies {
+                for p in pages {
+                    jw.page(p)?;
+                }
+                jw.end_set()?;
+            }
+        } else {
+            for p in pages {
+                for _ in 0..copies {
+                    jw.page(p)?;
+                }
+            }
+        }
+        jw.finish()
+    };
+    run().expect("writing to a Vec cannot fail")
 }
 
 #[cfg(test)]
@@ -192,6 +258,7 @@ mod tests {
         Page {
             raster: vec![],
             blank: false,
+            length: None,
         }
     }
 
@@ -275,6 +342,61 @@ mod tests {
     }
 
     #[test]
+    fn job_writer_streams_the_same_bytes_as_encode_job() {
+        let c = JobConfig::from_cups("Collate=True", 2).unwrap();
+        let pages = [
+            Page {
+                raster: vec![],
+                blank: false,
+                length: None,
+            },
+            page(),
+        ];
+        let mut jw = JobWriter::begin(Vec::new(), &c, &meta()).unwrap();
+        for _ in 0..2 {
+            for p in &pages {
+                jw.page(p).unwrap();
+            }
+            jw.end_set().unwrap();
+        }
+        assert_eq!(jw.finish().unwrap(), encode_job(&c, &meta(), &pages));
+    }
+
+    #[test]
+    fn job_writer_with_no_pages_still_writes_a_set() {
+        let c = JobConfig::default();
+        let jw = JobWriter::begin(Vec::new(), &c, &meta()).unwrap();
+        assert_eq!(jw.finish().unwrap(), encode_job(&c, &meta(), &[]));
+    }
+
+    #[test]
+    fn page_length_override_changes_only_page_length_commands() {
+        let c = JobConfig::from_cups("PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel", 1)
+            .unwrap();
+        let b = encode_job(
+            &c,
+            &meta(),
+            &[Page {
+                raster: vec![],
+                blank: false,
+                length: Some(212),
+            }],
+        );
+        let toks = decode(&b).unwrap();
+        let p = |cmd: u8| {
+            toks.iter()
+                .find_map(|t| match t.kind {
+                    Kind::Paren { cmd: c, payload } if c == cmd => Some(payload.to_vec()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(p(b'C'), vec![212, 0, 0, 0]);
+        assert_eq!(p(b'S'), vec![0x33, 6, 0, 0, 212, 0, 0, 0]);
+        assert_eq!(p(b'c'), vec![0xec, 0xff, 0xff, 0xff, 212, 0, 0, 0]);
+    }
+
+    #[test]
     fn skipped_blank_page_keeps_setup_but_drops_raster_and_form_feed() {
         // Capture 504 vs 004: Windows still sends the page setup (ESC(G .. ESC(e) for a skipped
         // blank page and omits only its raster and FF.
@@ -285,6 +407,7 @@ mod tests {
             &[Page {
                 raster: vec![0xaa],
                 blank: true,
+                length: None,
             }],
         );
         let toks = decode(&b).unwrap();
@@ -303,6 +426,7 @@ mod tests {
             &[Page {
                 raster: vec![],
                 blank: true,
+                length: None,
             }],
         );
         assert_eq!(
@@ -312,7 +436,8 @@ mod tests {
                 &meta(),
                 &[Page {
                     raster: vec![],
-                    blank: true
+                    blank: true,
+                    length: None,
                 }]
             )
             .len()
@@ -328,6 +453,7 @@ mod tests {
             vec![Page {
                 raster: vec![],
                 blank: true,
+                length: None,
             }],
         ] {
             let b = encode_job(&c, &meta(), &pages);
