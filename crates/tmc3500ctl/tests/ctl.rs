@@ -356,3 +356,31 @@ fn setup_keeps_the_config_file_mode() {
     let m = std::fs::metadata(h.cfg()).unwrap().permissions().mode();
     assert_eq!(m & 0o777, 0o640);
 }
+
+#[test]
+fn setup_apply_enables_the_monitor() {
+    let h = H::new();
+    h.tool("lpadmin", "true");
+    h.tool(
+        "systemctl",
+        &format!("echo \"$@\" > {}/systemctl.args", h.dir.path().display()),
+    );
+    assert!(h.file("systemctl.args").is_none());
+    let o = h.run(&["setup", "--printer", "192.0.2.52"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(
+        h.file("systemctl.args").is_none(),
+        "systemctl ran without --apply"
+    );
+    let o = h.run(&["setup", "--printer", "192.0.2.52", "--apply"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        h.file("systemctl.args").unwrap().trim(),
+        "enable --now tmc3500-monitor.service"
+    );
+}

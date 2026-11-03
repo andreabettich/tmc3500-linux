@@ -17,7 +17,7 @@ struct Args {
     /// TCP job port.
     #[arg(long, default_value_t = 9100)]
     job_port: u16,
-    /// UDP SNMP port (161 needs privileges; use e.g. 1161 and `?snmp-port=1161` in the URI).
+    /// UDP SNMP port (161 needs privileges; use e.g. 1161 and `tmc3500://127.0.0.1:9100/?snmp-port=1161` as the URI).
     #[arg(long, default_value_t = 161)]
     snmp_port: u16,
     #[arg(long, default_value = "public")]

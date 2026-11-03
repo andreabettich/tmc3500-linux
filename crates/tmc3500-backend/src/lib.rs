@@ -702,6 +702,30 @@ impl Backend {
                     return self.hold(EventKind::JobHeld, "", &msg);
                 }
             };
+            // CUPS runs the backend even when the filter failed and produced nothing: don't
+            // contact the printer for an empty job.
+            let input = if copy == 1 {
+                let mut input = input;
+                let mut first = vec![0u8; 64 * 1024];
+                let got = loop {
+                    match input.read(&mut first) {
+                        Ok(n) => break n,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) => {
+                            self.log.error(&format!("cannot read the job data: {e}"));
+                            return CUPS_BACKEND_FAILED;
+                        }
+                    }
+                };
+                if got == 0 {
+                    self.log.warning("The job is empty (the filter produced no data); nothing was sent to the printer");
+                    return CUPS_BACKEND_OK;
+                }
+                first.truncate(got);
+                Box::new(std::io::Cursor::new(first).chain(input)) as Box<dyn Read>
+            } else {
+                input
+            };
             match self.deliver(input) {
                 Ok(total) => {
                     self.prior += total;

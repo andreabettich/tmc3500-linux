@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    if ! getent passwd tmc3500 >/dev/null; then
+        adduser --system --group --no-create-home --home /nonexistent tmc3500
+    fi
+    adduser tmc3500 lp >/dev/null 2>&1 || true
+    install -d -o root -g lp -m 2770 /var/lib/tmc3500
+    chown root:root /usr/lib/cups/backend/tmc3500 /usr/lib/cups/filter/rastertotmc3500
+    chmod 0755 /usr/lib/cups/backend/tmc3500 /usr/lib/cups/filter/rastertotmc3500
+    if command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
+        apparmor_parser -r -W /etc/apparmor.d/tmc3500 || true
+    fi
+    echo "tmc3500: run 'tmc3500ctl setup --printer <ip> --apply' to create the CUPS queue."
+fi
+#DEBHELPER#
+exit 0

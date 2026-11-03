@@ -486,6 +486,17 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
             return ctx.fail(EXIT_ERROR, &e, json!({ "command": args }));
         }
         applied = true;
+        // the monitor needs the printer address, so it is enabled only now
+        if let Err(e) = run_tool(
+            "systemctl",
+            &[
+                "enable".into(),
+                "--now".into(),
+                "tmc3500-monitor.service".into(),
+            ],
+        ) {
+            eprintln!("WARNING: could not enable tmc3500-monitor.service ({e}); start it by hand");
+        }
     }
     let v = json!({
         "ok": true,

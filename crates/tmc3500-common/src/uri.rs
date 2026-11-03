@@ -1,4 +1,5 @@
-//! `tmc3500://host[:port][/][?snmp-port=N&community=C]` device URIs.
+//! `tmc3500://host[:port][/][?snmp-port=N&community=C]` device URIs. CUPS (lpadmin) only accepts a
+//! query after a path, so write `tmc3500://host:9100/?snmp-port=1161`.
 use std::fmt;
 
 pub const SCHEME: &str = "tmc3500";

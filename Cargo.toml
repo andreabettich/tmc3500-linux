@@ -20,3 +20,4 @@ version = "0.1.0"
 [profile.release]
 panic = "abort"
 lto = true
+strip = true

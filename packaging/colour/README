@@ -1,0 +1,5 @@
+Fitted colour tables for rastertotmc3500, one file per coating, quality and colour mode:
+  {plain,matte,synthetic,wristband,glossy}-{speed,q1,q2}-{preferred,standard,gamma18,off}.lut
+Built with `cargo run -p xtask -- fit-colour <capture.prn> <layout.json> <out.lut>` from Windows
+colour-chart captures (tmc3500_colour_kit). Without a table the filter uses provisional colours and
+logs an INFO line. Override the directory with TMC3500_COLOUR_DIR.

@@ -730,3 +730,24 @@ fn unreachable_limit_counts_from_the_first_failed_connect() {
         t.elapsed()
     );
 }
+
+#[test]
+fn empty_job_does_not_touch_the_printer() {
+    // happens when the filter rejected the job: CUPS still runs the backend with no data
+    let h = H::new(b"");
+    let mut child = h
+        .cmd(&h.uri())
+        .args(["7", "bob", "t", "1", ""])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdin.take());
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(h.fake.connection_count(), 0, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("WARNING:") && r.stderr.contains("empty"),
+        "{}",
+        r.stderr
+    );
+}
