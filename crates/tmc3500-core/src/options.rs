@@ -330,6 +330,15 @@ impl JobConfig {
                 Some(base) if BOOL_KEYS.contains(&base) && v == "true" => {
                     (base.to_string(), "false".to_string())
                 }
+                // A negated driver option must name a known boolean and carry no value;
+                // otherwise a typo would be silently ignored.
+                Some(base) if base.starts_with("Tm") => {
+                    return Err(if BOOL_KEYS.contains(&base) {
+                        bad(&k, &v)
+                    } else {
+                        OptError::UnknownOption(k)
+                    });
+                }
                 _ => (k, v),
             };
             let (k, v) = (k.as_str(), v.as_str());
@@ -709,5 +718,22 @@ mod tests {
             .map(Coating::sn_code),
             [1, 3, 4, 5, 6]
         );
+    }
+
+    #[test]
+    fn negated_tm_options_are_validated_too() {
+        for o in [
+            "noTmBorderles",
+            "noTmFoo",
+            "noTmBorderless=false",
+            "noTmCoating",
+        ] {
+            assert!(
+                JobConfig::from_cups(o, 1).is_err(),
+                "{o:?} should be rejected"
+            );
+        }
+        assert!(!cfg("noTmBorderless").borderless);
+        assert!(cfg("nothing=1 notice").borderless);
     }
 }

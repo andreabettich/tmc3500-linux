@@ -4,8 +4,8 @@ use crate::units::{dots_to_mm10_ceil, mm10_to_dots};
 
 /// Left/right liner edge added to the width of label forms.
 pub const EDGE_DOTS: u32 = 28;
-/// Widest paper width (108 mm). Wider label+edge widths shift the left margin
-/// (an assumption that fits both captured cases; see spec section 3).
+/// Widest paper width (108 mm). Wider label+edge widths get a left margin of two edges instead of
+/// one (spec section 3; an assumption that fits both captured cases, to confirm on the printer).
 pub const MAX_PAPER_DOTS: u32 = 1531;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,8 +34,9 @@ pub fn geometry(cfg: &JobConfig) -> Geometry {
     } else {
         media_w
     };
+    // Spec section 3: wider than the widest paper → 2 edges, otherwise 1 (assumption, see const).
     let left = if width > MAX_PAPER_DOTS {
-        width - MAX_PAPER_DOTS
+        2 * EDGE_DOTS
     } else {
         EDGE_DOTS
     };
@@ -202,6 +203,21 @@ mod tests {
                 (pl, w, h, l, -20, b, snw, snl),
                 "options {o:?}"
             );
+        }
+    }
+
+    #[test]
+    fn left_margin_follows_spec_step_rule_without_dipping_below_edge() {
+        // Spec section 3: ESC(l is 56 when the width exceeds 1531 dots, otherwise 28.
+        for (o, left) in [
+            ("PageSize=Custom.4.10x6in", 28), // exactly 1531 dots
+            ("PageSize=Custom.4.12x6in", 56),
+            ("PageSize=Custom.4.15x6in", 56),
+            ("PageSize=Custom.4.20x6in", 56),
+            ("PageSize=Custom.4.07x6in", 28),
+            ("PageSize=Custom.4.25x6in TmMediaForm=ContinuousPaper", 28),
+        ] {
+            assert_eq!(g(o).left, left, "options {o:?}");
         }
     }
 }
