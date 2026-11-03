@@ -759,7 +759,10 @@ fn empty_job_does_not_touch_the_printer() {
 #[test]
 #[ignore]
 fn soak_random_faults_never_lose_or_duplicate() {
-    let n: u64 = std::env::var("SOAK_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let n: u64 = std::env::var("SOAK_JOBS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
     let job = big_job();
     let h = H::new(&job);
     let mut rng: u64 = 0x5eed_1234_abcd_0001;
@@ -784,7 +787,14 @@ fn soak_random_faults_never_lose_or_duplicate() {
         let id = format!("{}", 1000 + i);
         let child = h
             .cmd(&h.uri())
-            .args([id.as_str(), "soak", "label", "1", "", h.job_file.to_str().unwrap()])
+            .args([
+                id.as_str(),
+                "soak",
+                "label",
+                "1",
+                "",
+                h.job_file.to_str().unwrap(),
+            ])
             .stdin(Stdio::null())
             .spawn()
             .unwrap();
@@ -799,15 +809,29 @@ fn soak_random_faults_never_lose_or_duplicate() {
         let new = after.len() - before;
         match r.code {
             0 => {
-                assert_eq!(new, 1, "job {id} (fault {fault}) exit 0 but {new} deliveries\n{}", r.stderr);
-                assert!(after.last() == Some(&job), "job {id}: delivered bytes differ");
+                assert_eq!(
+                    new, 1,
+                    "job {id} (fault {fault}) exit 0 but {new} deliveries\n{}",
+                    r.stderr
+                );
+                assert!(
+                    after.last() == Some(&job),
+                    "job {id}: delivered bytes differ"
+                );
                 ok += 1;
             }
             3 => {
-                assert_eq!(new, 0, "job {id} (fault {fault}) held but delivered\n{}", r.stderr);
+                assert_eq!(
+                    new, 0,
+                    "job {id} (fault {fault}) held but delivered\n{}",
+                    r.stderr
+                );
                 held += 1;
             }
-            c => panic!("job {id} (fault {fault}): unexpected exit {c}\n{}", r.stderr),
+            c => panic!(
+                "job {id} (fault {fault}): unexpected exit {c}\n{}",
+                r.stderr
+            ),
         }
         h.fake.set_drop_after(None);
         h.fake.set_slow_read(None);

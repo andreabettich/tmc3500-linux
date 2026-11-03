@@ -1,5 +1,10 @@
 #!/bin/sh
 set -e
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    if command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
+        apparmor_parser -R /etc/apparmor.d/tmc3500 >/dev/null 2>&1 || true
+    fi
+fi
 if [ "$1" = purge ]; then
     rm -rf /var/lib/tmc3500
     if getent passwd tmc3500 >/dev/null && command -v deluser >/dev/null; then

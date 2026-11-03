@@ -174,11 +174,18 @@ impl Converter {
     }
 
     /// Converter using a fitted table (ink adjustment and brightness are applied on top).
+    /// With K-only black the table is not used (tables are fitted from Windows' rich black): the
+    /// K-only formula keeps barcodes and text pure black.
     pub fn with_lut(s: &ColorSettings, black: BlackMode, lut: Lut) -> Self {
         Self {
-            lut: Some(lut),
+            lut: (black == BlackMode::Rich).then_some(lut),
             ..Self::new(s, black)
         }
+    }
+
+    /// True when a fitted colour table is in use.
+    pub fn uses_table(&self) -> bool {
+        self.lut.is_some()
     }
 
     /// Drop-size fractions `[small, medium, large]` per ink `[K, C, M, Y]`.
@@ -361,5 +368,18 @@ mod tests {
         let c = JobConfig::from_cups("TmInkAdjust=True TmInkBkCMY=-2", 1).unwrap();
         let conv = Converter::with_lut(&c.color, c.black, lut);
         assert_eq!(conv.drops([0, 0, 0])[1], [0, 0, 54000]);
+    }
+
+    #[test]
+    fn k_only_black_is_kept_when_a_table_is_installed() {
+        // tables are fitted from Windows' rich black; K-only (barcodes) must not silently use them
+        let lut = node_lut(2, |_, _, _| [[0, 0, 30000]; 4]);
+        let c = JobConfig::from_cups("TmBlack=KOnly", 1).unwrap();
+        let conv = Converter::with_lut(&c.color, c.black, lut);
+        assert_eq!(
+            conv.drops([0, 0, 0]),
+            [[0, 0, 65535], [0; 3], [0; 3], [0; 3]]
+        );
+        assert!(!conv.uses_table());
     }
 }

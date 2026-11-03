@@ -4,8 +4,9 @@
 # held job and an alert have all been exercised on the target host, check the log with
 #   journalctl -k | grep -E 'apparmor=.*tmc3500'
 # and, if clean, enforce with:  aa-enforce /etc/apparmor.d/tmc3500
-# Note: a confined cupsd (Ubuntu's usr.sbin.cupsd profile) may run third-party backends in its own
-# child profile instead of this one; see docs/operations.md.
+# NOT attached on a stock system: the distribution's cupsd profile runs backends and filters in its own
+# third_party child profile. docs/operations.md section 7 shows the local cupsd rule that hands over to
+# these profiles.
 
 abi <abi/3.0>,
 include <tunables/global>

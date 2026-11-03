@@ -37,13 +37,18 @@ pub fn reassemble(job: &[u8]) -> Result<Vec<InkPage>, DecodeError> {
                 bytes_per_line,
                 lines,
                 data,
+                compressed,
                 ..
             } => {
                 let bpl = usize::from(bytes_per_line);
-                let raw = rle::decode(data, bpl * usize::from(lines)).map_err(|_| DecodeError {
-                    offset: t.offset,
-                    reason: "bad RLE data",
-                })?;
+                let raw = if compressed {
+                    rle::decode(data, bpl * usize::from(lines)).map_err(|_| DecodeError {
+                        offset: t.offset,
+                        reason: "bad RLE data",
+                    })?
+                } else {
+                    data.to_vec()
+                };
                 let ink = Ink::ALL.into_iter().find(|i| i.code() == color & 0x3f);
                 if let (Some(p), Some(ink)) = (page.as_mut(), ink) {
                     let nr = i64::from(color >> 6 & 1);
@@ -55,8 +60,13 @@ pub fn reassemble(job: &[u8]) -> Result<Vec<InkPage>, DecodeError> {
                         for k in 0..bpl * 4 {
                             let v = (raw[l * bpl + k / 4] >> (6 - 2 * (k % 4))) & 3;
                             if v != 0 {
-                                let col = x + k as u32 * hscale;
-                                p.set(ink, col, r as u32, v);
+                                // positions come from the stream: skip dots that would overflow
+                                if let Some(col) = (k as u32)
+                                    .checked_mul(hscale)
+                                    .and_then(|o| x.checked_add(o))
+                                {
+                                    p.set(ink, col, r as u32, v);
+                                }
                             }
                         }
                     }
@@ -154,6 +164,17 @@ mod tests {
             .filter(|&x| p.get(Ink::K, x, 120) != 0)
             .collect();
         assert_eq!((cols[0], *cols.last().unwrap()), (90, 449));
+    }
+
+    #[test]
+    fn huge_horizontal_position_does_not_overflow() {
+        // ESC(S, ESC(v, ESC($ = u32::MAX, then one raster line with ink
+        let mut b =
+            b"\x1b(S\x08\0\x10\0\0\0\x10\0\0\0\x1b(v\x04\0\x14\0\0\0\x1b($\x04\0\xff\xff\xff\xff"
+                .to_vec();
+        b.extend_from_slice(b"\x1bi\x00\x00\x02\x01\x00\x01\x00\xff");
+        let pages = reassemble(&b).unwrap();
+        assert!(pages[0].is_blank());
     }
 
     #[test]

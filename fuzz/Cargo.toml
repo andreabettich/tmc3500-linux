@@ -38,3 +38,10 @@ path = "fuzz_targets/colour_table.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "snmp"
+path = "fuzz_targets/snmp.rs"
+test = false
+doc = false
+bench = false

@@ -265,7 +265,16 @@ pub fn converter<L: Write>(
         }
     };
     match tmc3500_core::color::Lut::parse(&bytes) {
-        Ok(lut) => Converter::with_lut(&cfg.color, cfg.black, lut),
+        Ok(lut) => {
+            let conv = Converter::with_lut(&cfg.color, cfg.black, lut);
+            if !conv.uses_table() {
+                let _ = writeln!(
+                    log,
+                    "INFO: TmBlack=KOnly: colour table {name} not used (it holds rich black)"
+                );
+            }
+            conv
+        }
         Err(e) => {
             let _ = writeln!(
                 log,

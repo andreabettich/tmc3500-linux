@@ -363,7 +363,7 @@ fn setup_apply_enables_the_monitor() {
     h.tool("lpadmin", "true");
     h.tool(
         "systemctl",
-        &format!("echo \"$@\" > {}/systemctl.args", h.dir.path().display()),
+        &format!("echo \"$@\" >> {}/systemctl.args", h.dir.path().display()),
     );
     assert!(h.file("systemctl.args").is_none());
     let o = h.run(&["setup", "--printer", "192.0.2.52"]);
@@ -379,9 +379,10 @@ fn setup_apply_enables_the_monitor() {
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
+    // enable for boot, and restart so a running monitor picks up a changed printer address
     assert_eq!(
-        h.file("systemctl.args").unwrap().trim(),
-        "enable --now tmc3500-monitor.service"
+        h.file("systemctl.args").unwrap(),
+        "enable tmc3500-monitor.service\nrestart tmc3500-monitor.service\n"
     );
 }
 

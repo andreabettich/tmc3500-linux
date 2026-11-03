@@ -32,7 +32,7 @@ jobs:
       - name: Short fuzz run per target
         working-directory: fuzz
         run: |
-          for t in cupsraster options decode colour_table; do
+          for t in cupsraster options decode colour_table snmp; do
             cargo +nightly fuzz run "$t" -- -max_total_time=60 -rss_limit_mb=1024
           done
 

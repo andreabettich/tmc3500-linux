@@ -19,6 +19,7 @@ tempfile = "3"
 
 [package.metadata.deb]
 name = "tmc3500"
+description = "CUPS driver for the Epson TM-C3500 label printer"
 maintainer = "TM-C3500 Linux driver maintainers"
 copyright = "2026, TM-C3500 Linux driver contributors"
 extended-description = """\

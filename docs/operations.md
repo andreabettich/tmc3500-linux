@@ -13,8 +13,9 @@ lpstat -p TM-C3500
 
 `setup` writes `/etc/tmc3500/tmc3500.toml`, creates the CUPS queue with device URI
 `tmc3500://192.0.2.50` and the PPD `/usr/share/ppd/tmc3500/tmc3500.ppd`, sets
-`printer-error-policy=stop-printer`, and enables `tmc3500-monitor.service`. Without `--apply` it only
-prints what it would run.
+`printer-error-policy=stop-printer`, and enables and (re)starts `tmc3500-monitor.service`. Without
+`--apply` it writes the configuration file but only prints the `lpadmin` command. Re-run it with the new
+address whenever the printer's IP changes.
 
 Installed files:
 
@@ -117,10 +118,11 @@ Test the chain: `sudo -u tmc3500 /etc/tmc3500/alert.d/50-syslog < /dev/null` sho
 ## 6. Colour tables
 
 Brand colours depend on fitted colour tables in `/usr/share/tmc3500/colour/`, one per coating, quality and
-colour mode. Until they are installed the driver prints with provisional colours (barcodes and black text
-are unaffected). Tables are produced from Windows colour-chart captures with
-`cargo run -p xtask -- fit-colour <capture.prn> <layout.json> <name>.lut` (see
-`tmc3500_colour_kit/README.md`).
+colour mode. Until they are installed the driver prints with provisional colours. For barcodes and black
+text use `-o TmBlack=KOnly`: it always prints pure black ink, with or without tables. Tables are produced
+from Windows colour-chart captures with
+`cargo run -p xtask -- fit-colour <capture.prn> <layout.json> <name>.lut` (the chart and its
+`layout.json` come from `tools/make_colour_chart.py` in the source tree).
 
 ## 7. Hardening checklist
 
@@ -129,24 +131,34 @@ are unaffected). Tables are produced from Windows colour-chart captures with
   - In `/etc/cups/cupsd.conf`: `Listen localhost:631`, or restrict `<Location />` to the application
     hosts.
   - Disable the web interface if unused: `sudo cupsctl WebInterface=no`.
-- **Network:** allow the print host to reach the printer on TCP 9100 and UDP 161 (SNMP) only. Restrict the
-  monitor further with a drop-in:
+- **Network:** allow the print host to reach the printer on TCP 9100 and UDP 161 (SNMP). Restrict the
+  monitor further with a drop-in. Alert hooks run inside the monitor's sandbox, so list the mail relay,
+  the webhook host and the DNS servers as well, or idle-time alerts are silently lost:
   ```ini
   # systemctl edit tmc3500-monitor
   [Service]
   IPAddressDeny=any
-  IPAddressAllow=192.0.2.50 localhost
+  IPAddressAllow=192.0.2.50 localhost <mail-relay-ip> <webhook-ip> <dns-server-ip>
   ```
+  Test an alert afterwards (section 5).
 - **SNMP:** set a non-default read community on the printer and in `[snmp] community`. A non-default
   SNMP port or community can also be given in the device URI:
   `lpadmin -p TM-C3500 -v 'tmc3500://192.0.2.50:9100/?snmp-port=1161&community=xyz'` (the `/` before `?`
   is required by CUPS).
-- **AppArmor:** profiles ship in complain mode.
-  - After a full test (print, cut, held job, alert), check `journalctl -k | grep tmc3500`.
-  - If the log is clean, run `sudo aa-enforce /etc/apparmor.d/tmc3500`.
-  - On Ubuntu, a confined cupsd may run backends in its own child profile, so check with `ps -eZ` while
-    printing.
-- **Updates:** `apt` upgrades restart nothing; jobs in progress are protected by the partial-job markers.
+- **AppArmor:** profiles ship in complain mode and are **not attached on a stock system**: Ubuntu's and
+  Debian's cupsd profile runs every backend and filter in its own `third_party` child profile, and
+  Raspberry Pi OS has AppArmor off. To use ours, make cupsd hand over to them in
+  `/etc/apparmor.d/local/usr.sbin.cupsd`:
+  ```
+  /usr/lib/cups/backend/tmc3500 Px -> tmc3500-backend,
+  /usr/lib/cups/filter/rastertotmc3500 Px -> tmc3500-filter,
+  ```
+  then `sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.cupsd`. Check with `ps -eZ | grep tmc3500`
+  while printing. After a full test (print, cut, held job, alert), check
+  `journalctl -k | grep tmc3500`; if clean, `sudo aa-enforce /etc/apparmor.d/tmc3500`.
+- **Updates:** an `apt` upgrade restarts `tmc3500-monitor` (if running) but not CUPS; a job in progress
+  keeps running with the old backend, and the partial-job markers protect jobs interrupted by a CUPS
+  restart.
 
 ## 8. Troubleshooting
 
