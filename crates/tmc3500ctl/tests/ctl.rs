@@ -429,3 +429,188 @@ fn marker_is_removed_before_the_job_is_resumed() {
         "job 15 partially sent"
     );
 }
+
+/// Two fake printers on different loopback addresses, configured as two queues.
+fn two_printers(h: &H) -> (FakePrinter, FakePrinter) {
+    let a = FakePrinter::start_local().unwrap();
+    let b = FakePrinter::start(tmc3500_fakeprinter::Options {
+        bind: "127.0.0.2".parse().unwrap(),
+        ..Default::default()
+    })
+    .unwrap();
+    std::fs::write(
+        h.cfg(),
+        format!(
+            "[snmp]\ntimeout_ms = 200\nretries = 0\n\
+             [[printers]]\nqueue = \"TM-C3500-1\"\nhost = \"127.0.0.1\"\nsnmp_port = {}\n\
+             [[printers]]\nqueue = \"TM-C3500-2\"\nhost = \"127.0.0.2\"\nsnmp_port = {}\n",
+            a.snmp_port(),
+            b.snmp_port()
+        ),
+    )
+    .unwrap();
+    (a, b)
+}
+
+#[test]
+fn status_reports_every_configured_printer() {
+    let h = H::new();
+    let (a, b) = two_printers(&h);
+    a.set_paper_out(true);
+    b.set_ink(InkColor::Cyan, 4);
+    let o = h.run(&["status", "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let j = json(&o);
+    let p = j["printers"].as_array().expect("printers list");
+    assert_eq!(p.len(), 2, "{j}");
+    assert_eq!(p[0]["queue"], "TM-C3500-1");
+    assert_eq!(p[0]["printer"], "127.0.0.1");
+    assert_eq!(p[0]["blocking"], true);
+    assert_eq!(p[1]["queue"], "TM-C3500-2");
+    assert_eq!(p[1]["blocking"], false);
+    assert_eq!(p[1]["supplies"][1]["state"], "low");
+    // human output names each queue
+    let s = out(&h.run(&["status"]));
+    assert!(s.contains("TM-C3500-1") && s.contains("TM-C3500-2"), "{s}");
+    assert!(s.contains("media-empty-error"), "{s}");
+    // one queue: the single-printer shape, with its queue
+    let j = json(&h.run(&["status", "--json", "--queue", "TM-C3500-2"]));
+    assert!(j.get("printers").is_none(), "{j}");
+    assert_eq!(j["queue"], "TM-C3500-2");
+    assert_eq!(j["printer"], "127.0.0.2");
+    // ink and counters too
+    let j = json(&h.run(&["ink", "--json"]));
+    assert_eq!(j["printers"].as_array().unwrap().len(), 2, "{j}");
+    let j = json(&h.run(&["counters", "--json", "--queue", "TM-C3500-1"]));
+    assert_eq!(j["queue"], "TM-C3500-1");
+    // unknown queue
+    let o = h.run(&["status", "--queue", "TM-C3500-9"]);
+    assert_eq!(o.status.code(), Some(1));
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(e.contains("TM-C3500-9") && e.contains("TM-C3500-1"), "{e}");
+}
+
+#[test]
+fn one_unreachable_printer_is_reported_and_exits_2() {
+    let h = H::new();
+    let (_a, b) = two_printers(&h);
+    b.set_snmp_mode(SnmpMode::Silent);
+    let o = h.run(&["status", "--json"]);
+    assert_eq!(o.status.code(), Some(2));
+    let j = json(&o);
+    let p = j["printers"].as_array().unwrap();
+    assert_eq!(p[0]["reachable"], true, "{j}");
+    assert_eq!(p[1]["reachable"], false, "{j}");
+    assert_eq!(p[1]["queue"], "TM-C3500-2");
+    assert!(p[1]["error"].as_str().unwrap().contains("timeout"), "{j}");
+    let o = h.run(&["status"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(out(&o).contains("TM-C3500-1"), "{}", out(&o));
+}
+
+#[test]
+fn single_printer_status_names_its_queue_and_all_gives_the_list() {
+    let h = H::new();
+    let fake = FakePrinter::start_local().unwrap();
+    h.write_cfg(&fake);
+    let j = json(&h.run(&["status", "--json"]));
+    assert!(j.get("printers").is_none(), "{j}");
+    assert_eq!(j["queue"], "TM-C3500");
+    let j = json(&h.run(&["status", "--json", "--all"]));
+    assert_eq!(j["printers"][0]["queue"], "TM-C3500", "{j}");
+}
+
+#[test]
+fn setup_adds_and_updates_printers_by_queue() {
+    let h = H::new();
+    let load = || tmc3500_common::config::Config::load(&h.cfg()).unwrap();
+    let hosts = || {
+        load()
+            .printers()
+            .into_iter()
+            .map(|p| format!("{}={}", p.queue, p.host))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        h.run(&["setup", "--printer", "192.0.2.1"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(hosts(), vec!["TM-C3500=192.0.2.1"]);
+    let o = h.run(&["setup", "--printer", "192.0.2.2", "--queue", "TM-C3500-2"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        out(&o).contains("lpadmin -p TM-C3500-2 -E -v tmc3500://192.0.2.2 "),
+        "{}",
+        out(&o)
+    );
+    assert_eq!(hosts(), vec!["TM-C3500=192.0.2.1", "TM-C3500-2=192.0.2.2"]);
+    // a new address for an existing queue replaces it
+    assert_eq!(
+        h.run(&["setup", "--printer", "192.0.2.3", "--queue", "TM-C3500-2"])
+            .status
+            .code(),
+        Some(0)
+    );
+    assert_eq!(
+        h.run(&["setup", "--printer", "192.0.2.9"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(hosts(), vec!["TM-C3500=192.0.2.9", "TM-C3500-2=192.0.2.3"]);
+    let o = h.run(&[
+        "setup",
+        "--printer",
+        "192.0.2.4",
+        "--queue",
+        "TM-C3500-3",
+        "--json",
+    ]);
+    assert_eq!(json(&o)["queue"], "TM-C3500-3");
+    assert_eq!(hosts().len(), 3);
+}
+
+#[test]
+fn release_held_jobs_covers_every_configured_queue() {
+    let h = H::new();
+    lp_tools(&h);
+    std::fs::write(
+        h.cfg(),
+        "[printer]\nhost = \"192.0.2.1\"\n[[printers]]\nqueue = \"TM-C3500-2\"\nhost = \"192.0.2.2\"\n",
+    )
+    .unwrap();
+    let j = json(&h.run(&["release-held-jobs", "--dry-run", "--json"]));
+    assert_eq!(
+        j["held"],
+        serde_json::json!(["TM-C3500-12", "TM-C3500-15", "TM-C3500-2-14"])
+    );
+    assert_eq!(j["queues"], serde_json::json!(["TM-C3500", "TM-C3500-2"]));
+    // a job number is found on whichever queue holds it
+    let o = h.run(&["release-held-jobs", "--json", "--job", "14"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(json(&o)["released"], serde_json::json!(["TM-C3500-2-14"]));
+    assert_eq!(h.file("lp.args").unwrap(), "-i TM-C3500-2-14 -H resume\n");
+    // --queue limits it to one queue
+    let j = json(&h.run(&[
+        "release-held-jobs",
+        "--dry-run",
+        "--json",
+        "--queue",
+        "TM-C3500-2",
+    ]));
+    assert_eq!(j["held"], serde_json::json!(["TM-C3500-2-14"]));
+    assert_eq!(j["queue"], "TM-C3500-2");
+}
