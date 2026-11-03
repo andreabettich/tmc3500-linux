@@ -140,20 +140,29 @@ Byte layout of a job, as produced by Windows (default settings):
 
 ### 3.1 SN media block
 
-The `SN` payload is 28 bytes:
+The `SN` payload is 26 bytes (REMOTE1 length field `1a 00`):
 
 | bytes | field |
 |---|---|
 | 0–1 | `00 40` |
 | 2–3 | `ff ff` |
-| 4–5 | label width incl. liner, in 0.1 mm (e.g. 1120 = 112.0 mm) |
-| 6–7 | label length in 0.1 mm (`ffff` for continuous forms) |
+| 4–5 | width in 0.1 mm, rounded up from the `ESC(S` width (e.g. 1587 dots → 1120 = 112.0 mm) |
+| 6–7 | label length in 0.1 mm, rounded up from the length in dots (`ffff` for continuous forms) |
 | 8 | coating: 1 Plain, 3 Matte, 4 Synthetic, 5 Wristband, 6 Glossy (2 is used by continuous paper) |
 | 9 | `00` |
 | 10–17 | `ff…` |
 | 18 | vacuum (0x5A = 90, 0x41 = 65, 0x1E = 30; `ff` = automatic) |
-| 19–25 | `ff…` |
-| 26–27 | checksum: the 16-bit little-endian sum of bytes 2–25 |
+| 19–23 | `ff…` |
+| 24–25 | checksum: the 16-bit little-endian sum of bytes 2–23 |
+
+Raster compression: Epson RLE, applied per line (runs never cross a line). Runs of 3–128 identical bytes
+use control `257 − n`, then the byte. Everything else goes out as literals of 1–127 bytes, with control
+`n − 1`. This reproduces all 283,202 lines in the captures exactly.
+
+Geometry: sizes are first rounded to 0.1 mm (half up), then converted to 1/360 in (half up). The minimum
+length is 8.0 mm (0.31 in in the UI). Label forms add 2 × 28 dots of edge to the width. `ESC(l` is 56 when
+the width exceeds 1531 dots, otherwise 28 (an assumption; only those two cases were captured). The
+die-cut gap is 43 dots for the predefined 108 × 174.8 mm media and 42 for custom sizes.
 
 ### 3.2 Setting → command map
 
