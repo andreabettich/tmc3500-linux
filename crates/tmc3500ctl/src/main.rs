@@ -158,6 +158,15 @@ fn run(cli: Cli) -> i32 {
             )
         }
     }
+    if !matches!(cli.cmd, Cmd::Setup { .. }) {
+        if let Err(e) = ctx.cfg.validate_printers() {
+            return ctx.fail(
+                EXIT_ERROR,
+                &format!("{}: {e}", cfg_path.display()),
+                json!({}),
+            );
+        }
+    }
     match cli.cmd {
         Cmd::Status(t) => status(&ctx, &t, View::Status),
         Cmd::Ink(t) => status(&ctx, &t, View::Ink),
@@ -519,13 +528,20 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
     if !valid_queue(&queue) {
         return ctx.fail(EXIT_ERROR, "invalid queue name", json!({}));
     }
-    // One entry per queue: update the queue's printer, or add it.
+    // One entry per queue and per printer: a known queue gets the new address, a known address
+    // gets the new queue name (a renamed queue), anything else is added.
     let host = printer.to_string();
     let mut snmp_port = None;
+    let legacy_host = cfg.printer.host.clone().filter(|h| !h.is_empty());
     if let Some(e) = cfg.printers_cfg.iter_mut().find(|p| p.queue == queue) {
         e.host = host;
         snmp_port = e.snmp_port;
-    } else if cfg.printer.queue == queue || cfg.printer.host.is_none() {
+    } else if cfg.printer.queue == queue {
+        cfg.printer.host = Some(host);
+    } else if let Some(e) = cfg.printers_cfg.iter_mut().find(|p| p.host == host) {
+        e.queue = queue.clone();
+        snmp_port = e.snmp_port;
+    } else if legacy_host.is_none() || legacy_host.as_deref() == Some(host.as_str()) {
         cfg.printer.host = Some(host);
         cfg.printer.queue = queue.clone();
     } else {
@@ -543,7 +559,7 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
     if ppd_s.starts_with('-') || ppd_s.chars().any(char::is_control) {
         return ctx.fail(EXIT_ERROR, "invalid PPD path", json!({}));
     }
-    if let Err(e) = cfg.validate() {
+    if let Err(e) = cfg.validate().and_then(|()| cfg.validate_printers()) {
         return ctx.fail(EXIT_ERROR, &e.to_string(), json!({}));
     }
     let text = match cfg.to_toml() {
@@ -627,6 +643,7 @@ const REPRINT_WARNING: &str = "Warning: a released job prints again from the sta
 
 fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes: bool) -> i32 {
     // The given queue, else every configured one.
+    let explicit = queue.is_some();
     let queues: Vec<String> = match queue {
         Some(q) => vec![q],
         None => {
@@ -640,16 +657,30 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
     if !queues.iter().all(|q| valid_queue(q)) {
         return ctx.fail(EXIT_ERROR, "invalid queue name", json!({}));
     }
+    let mut warnings = Vec::new();
+    let mut held: Vec<String> = Vec::new();
+    let mut seen = Vec::new();
+    for q in &queues {
+        match run_tool("lpstat", &["-l".into(), "-o".into(), q.clone()]) {
+            Ok(out) => {
+                held.extend(lpstat::held_jobs(&out, q));
+                seen.push(q.clone());
+            }
+            // A configured queue missing from CUPS must not block releasing jobs elsewhere.
+            Err(e) if !explicit => warnings.push(format!("queue {q} skipped: {e}")),
+            Err(e) => return ctx.fail(EXIT_ERROR, &e, json!({ "queue": q, "queues": [q] })),
+        }
+    }
+    if seen.is_empty() {
+        return ctx.fail(
+            EXIT_ERROR,
+            &format!("cannot list jobs: {}", warnings.join("; ")),
+            json!({ "queue": null, "queues": queues }),
+        );
+    }
+    let queues = seen;
     let single = (queues.len() == 1).then(|| queues[0].clone());
     let queue = queues.join(", ");
-    let mut held: Vec<String> = Vec::new();
-    for q in &queues {
-        let out = match run_tool("lpstat", &["-l".into(), "-o".into(), q.clone()]) {
-            Ok(o) => o,
-            Err(e) => return ctx.fail(EXIT_ERROR, &e, json!({ "queue": q })),
-        };
-        held.extend(lpstat::held_jobs(&out, q));
-    }
     let mut targets = Vec::new();
     for j in jobs {
         let id = if !j.is_empty() && j.bytes().all(|c| c.is_ascii_digit()) {
@@ -669,7 +700,7 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
                     "{j} is not a held job on {queue} (held: {})",
                     held.join(", ")
                 ),
-                json!({ "queue": queue, "held": held }),
+                json!({ "queue": single, "queues": queues, "held": held }),
             );
         }
         if !targets.contains(&id) {
@@ -686,7 +717,7 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
                 "held jobs on {queue}: {}. {REPRINT_WARNING} Release one with --job <id>, or all with --yes.",
                 held.join(", ")
             ),
-            json!({ "queue": queue, "held": held, "warning": REPRINT_WARNING }),
+            json!({ "queue": single, "queues": queues, "held": held, "warning": REPRINT_WARNING }),
         );
     }
     if !ctx.json && !dry_run && !targets.is_empty() {
@@ -695,7 +726,6 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
     }
     let mut released = Vec::new();
     let mut failed = Vec::new();
-    let mut warnings = Vec::new();
     if !dry_run {
         for id in &targets {
             // Remove the partial-send marker BEFORE resuming: CUPS restarts the job at once, and a

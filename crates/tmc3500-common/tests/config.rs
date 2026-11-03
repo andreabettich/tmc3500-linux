@@ -151,7 +151,7 @@ fn several_printers_are_listed_with_the_single_printer_first() {
 }
 
 #[test]
-fn bad_printer_lists_are_rejected() {
+fn bad_printer_lists_are_reported_without_breaking_the_rest() {
     let p = |q: &str, h: &str| format!("[[printers]]\nqueue = \"{q}\"\nhost = \"{h}\"\n");
     for bad in [
         format!("{}{}", p("A", "h1"), p("A", "h2")), // duplicate queue
@@ -160,13 +160,32 @@ fn bad_printer_lists_are_rejected() {
         p("A", ""),
         p("A", "two words"),
         format!("{}snmp_port = 0\n", p("A", "h")),
-        format!("{}colour = \"red\"\n", p("A", "h")), // unknown key
         (0..65)
             .map(|i| p(&format!("Q{i}"), "h"))
             .collect::<String>(),
     ] {
-        assert!(parse(&bad).is_err(), "accepted:\n{bad}");
+        // the file still loads (the CUPS backend does not use the list) ...
+        let c = parse(&bad).unwrap_or_else(|e| panic!("{e}:\n{bad}"));
+        // ... but the monitor and tmc3500ctl report the problem
+        assert!(c.validate_printers().is_err(), "accepted:\n{bad}");
     }
+    // an unknown key is still a syntax error of the whole file
+    assert!(parse(&format!("{}colour = \"red\"\n", p("A", "h"))).is_err());
+    let ok = parse(&format!("{}{}", p("A", "h1"), p("B", "h2"))).unwrap();
+    assert!(ok.validate_printers().is_ok());
+}
+
+#[test]
+fn old_single_printer_configs_still_load() {
+    // older tmc3500ctl versions accepted any host string
+    let c = parse("[printer]\nhost = \"\"\n").unwrap();
+    assert!(c.printers().is_empty(), "an empty host is no printer");
+}
+
+#[test]
+fn bracketed_ipv6_hosts_are_unwrapped() {
+    let c = parse("[[printers]]\nqueue = \"A\"\nhost = \"[2001:db8::1]\"\n").unwrap();
+    assert_eq!(c.printers()[0].host, "2001:db8::1");
 }
 
 #[test]

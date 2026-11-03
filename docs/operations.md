@@ -24,8 +24,11 @@ sudo tmc3500ctl setup --printer 192.0.2.51 --queue TM-C3500-1 --apply
 sudo tmc3500ctl setup --printer 192.0.2.52 --queue TM-C3500-2 --apply
 ```
 
-Each run adds the printer to `[[printers]]` in the configuration (or updates the address of a queue
-that is already there) and creates its CUPS queue. The monitor watches every configured printer.
+Each run adds the printer to `[[printers]]` in the configuration and creates its CUPS queue. Running
+it for a queue that is already configured changes that queue's address; running it for an address
+that is already configured with a new `--queue` renames that printer's queue (delete the old CUPS
+queue with `lpadmin -x`). Use the same address form (IP or name) in `setup` and in the queue, so
+the backend and the monitor recognise one printer. The monitor watches every configured printer.
 To remove a printer, delete its `[[printers]]` entry, run `sudo lpadmin -x <queue>` and
 `sudo systemctl restart tmc3500-monitor`.
 

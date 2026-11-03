@@ -63,6 +63,12 @@ fn run(a: Args) -> i32 {
             return 1;
         }
     };
+    if a.printer.is_none() {
+        if let Err(e) = cfg.validate_printers() {
+            log("ERROR", &format!("{}: {e}", path.display()));
+            return 1;
+        }
+    }
     let printers: Vec<PrinterEntry> = match &a.printer {
         Some(host) => vec![PrinterEntry {
             queue: cfg.printer.queue.clone(),

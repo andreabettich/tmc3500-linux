@@ -72,6 +72,14 @@ pub fn valid_queue(q: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.')
 }
 
+/// `[2001:db8::1]` → `2001:db8::1` (hosts are kept without brackets, as in device URIs).
+fn unbracket(h: &str) -> String {
+    h.strip_prefix('[')
+        .and_then(|r| r.strip_suffix(']'))
+        .unwrap_or(h)
+        .to_string()
+}
+
 /// A host name or IP address (no spaces, controls, slashes, `@` or leading `-`).
 fn valid_host(h: &str) -> bool {
     !h.is_empty()
@@ -328,14 +336,17 @@ impl Config {
     /// Every configured printer: `[printer]` (if it has a host) first, then `[[printers]]`.
     pub fn printers(&self) -> Vec<PrinterEntry> {
         let mut v = Vec::new();
-        if let Some(h) = &self.printer.host {
+        if let Some(h) = self.printer.host.as_deref().filter(|h| !h.is_empty()) {
             v.push(PrinterEntry {
                 queue: self.printer.queue.clone(),
-                host: h.clone(),
+                host: unbracket(h),
                 snmp_port: None,
             });
         }
-        v.extend(self.printers_cfg.iter().cloned());
+        v.extend(self.printers_cfg.iter().map(|p| PrinterEntry {
+            host: unbracket(&p.host),
+            ..p.clone()
+        }));
         v
     }
 
@@ -356,26 +367,11 @@ impl Config {
         }
     }
 
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    /// Check `[[printers]]`. Separate from [`Config::validate`]: the CUPS backend uses the queue's
+    /// device URI, not this list, so a mistake here must not stop printing. The monitor and
+    /// `tmc3500ctl` call it.
+    pub fn validate_printers(&self) -> Result<(), ConfigError> {
         let bad = |s: String| Err(ConfigError::Invalid(s));
-        if self.printer.port == 0 {
-            return bad("printer.port must be 1..=65535".into());
-        }
-        if self.snmp.port == 0 {
-            return bad("snmp.port must be 1..=65535".into());
-        }
-        if self.snmp.community.len() > 255 {
-            return bad("snmp.community longer than 255 bytes".into());
-        }
-        if self.snmp.retries > 10 {
-            return bad("snmp.retries must be 0..=10".into());
-        }
-        if !valid_queue(&self.printer.queue) {
-            return bad("printer.queue must be a CUPS queue name (A-Z a-z 0-9 - _ .)".into());
-        }
-        if self.printer.host.as_deref().is_some_and(|h| !valid_host(h)) {
-            return bad("printer.host must be a host name or IP address".into());
-        }
         if self.printers_cfg.len() > MAX_PRINTERS {
             return bad(format!("at most {MAX_PRINTERS} [[printers]]"));
         }
@@ -404,6 +400,26 @@ impl Config {
             if all[..i].iter().any(|q| q.queue == p.queue) {
                 return bad(format!("queue {} is configured twice", p.queue));
             }
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let bad = |s: String| Err(ConfigError::Invalid(s));
+        if self.printer.port == 0 {
+            return bad("printer.port must be 1..=65535".into());
+        }
+        if self.snmp.port == 0 {
+            return bad("snmp.port must be 1..=65535".into());
+        }
+        if self.snmp.community.len() > 255 {
+            return bad("snmp.community longer than 255 bytes".into());
+        }
+        if self.snmp.retries > 10 {
+            return bad("snmp.retries must be 0..=10".into());
+        }
+        if !valid_queue(&self.printer.queue) {
+            return bad("printer.queue must be a CUPS queue name (A-Z a-z 0-9 - _ .)".into());
         }
         let b = &self.backend;
         for (name, v) in [

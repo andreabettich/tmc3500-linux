@@ -114,7 +114,7 @@ tmc3500ctl [--json] [--config <path>] <command>
 | `status [--queue Q \| --all \| --printer <host>]` | state, CUPS reasons, raw SNMP error bits, supplies |
 | `ink [--queue Q \| --all \| --printer <host>]` | supplies only |
 | `counters [--queue Q \| --all \| --printer <host>]` | `sysDescr`, uptime, life count, power-on count |
-| `setup --printer <host> [--queue Q] [--ppd P] [--apply]` | records the printer for queue Q in the config (adds it, or updates the queue's address); prints the `lpadmin` command, or with `--apply` runs it, sets `printer-error-policy=stop-printer` and (re)starts the monitor |
+| `setup --printer <host> [--queue Q] [--ppd P] [--apply]` | records the printer for queue Q in the config: a known queue gets the new address, a known address gets the new queue name, anything else is added; prints the `lpadmin` command, or with `--apply` runs it, sets `printer-error-policy=stop-printer` and (re)starts the monitor |
 | `release-held-jobs [--queue Q] [--dry-run] [--job ID]... [--yes]` | lists held jobs on Q (default: every configured queue) with the reprint warning; releases the jobs named with `--job` (a full ID or a bare job number) or all with `--yes`, and removes their partial-send markers |
 | `nozzle-check`, `clean` | **disabled**: always exit 3 (§9) |
 
@@ -168,7 +168,7 @@ also uses 2 for usage errors); 3 maintenance command disabled.
 { "ok": false, "error": "...", ... }                     // unreachable adds "queue", "printer", "reachable": false;
                                                          // disabled maintenance adds "command"
 
-// several printers (one unreachable: exit code 2)
+// several printers (one unreachable: exit code 2; the list form has no "ok" field, check "reachable")
 { "printers": [ { "queue": "TM-C3500-1", "printer": "192.0.2.51", "reachable": true, ... },
                 { "queue": "TM-C3500-2", "printer": "192.0.2.52", "reachable": false, "error": "..." } ] }
 
@@ -177,6 +177,8 @@ also uses 2 for usage errors); 3 maintenance command disabled.
   "uri": "tmc3500://192.0.2.50", "command": ["lpadmin", "-p", "TM-C3500", ...], "applied": true }
 
 // tmc3500ctl --json release-held-jobs --job 42
+// "queue" is null when several queues were covered; a configured queue CUPS doesn't know is skipped
+// with a line in "warnings" (asked for with --queue, it's an error)
 { "ok": true, "queue": "TM-C3500", "queues": ["TM-C3500"], "dry_run": false, "held": [...], "released": [...],
   "failed": [{ "id": "...", "error": "..." }], "warning": "Warning: a released job prints again ...",
   "warnings": [] }
@@ -258,8 +260,10 @@ installed file documents every key with its default. Sections:
 
 - `[printer]`: `host`, `port`, `queue`: a single printer;
 - `[[printers]]`: further printers, one table each with `queue`, `host` and optional `snmp_port`
-  (at most 64; every queue at most once across `[printer]` and `[[printers]]`). `tmc3500ctl setup`
-  maintains both;
+  (at most 64; every queue at most once across `[printer]` and `[[printers]]`; IPv6 addresses
+  without brackets). `tmc3500ctl setup` maintains both. A mistake in this list is reported by the
+  monitor and `tmc3500ctl`; the backend ignores the list (it uses the queue's device URI), so it
+  never stops printing;
 - `[snmp]`: `enabled`, `port`, `community`, `version` (`1`/`2c`), `timeout_ms`, `retries`;
 - `[backend]`: `connect_timeout_ms`, `io_timeout_ms`, `status_interval_ms`, `retry_initial_ms`,
   `retry_max_ms`, `unreachable_hold_after_ms` (10 min), `stall_timeout_ms` (5 min),

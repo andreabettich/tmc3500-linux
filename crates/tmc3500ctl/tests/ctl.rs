@@ -614,3 +614,81 @@ fn release_held_jobs_covers_every_configured_queue() {
     assert_eq!(j["held"], serde_json::json!(["TM-C3500-2-14"]));
     assert_eq!(j["queue"], "TM-C3500-2");
 }
+
+#[test]
+fn setup_with_a_new_queue_for_a_known_printer_renames_it() {
+    let h = H::new();
+    let hosts = || {
+        tmc3500_common::config::Config::load(&h.cfg())
+            .unwrap()
+            .printers()
+            .into_iter()
+            .map(|p| format!("{}={}", p.queue, p.host))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        h.run(&["setup", "--printer", "10.0.0.1"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(
+        h.run(&["setup", "--printer", "10.0.0.1", "--queue", "Badges"])
+            .status
+            .code(),
+        Some(0)
+    );
+    assert_eq!(hosts(), vec!["Badges=10.0.0.1"]);
+    assert_eq!(
+        h.run(&["setup", "--printer", "10.0.0.2", "--queue", "Desk2"])
+            .status
+            .code(),
+        Some(0)
+    );
+    assert_eq!(
+        h.run(&["setup", "--printer", "10.0.0.2", "--queue", "Desk-2"])
+            .status
+            .code(),
+        Some(0)
+    );
+    assert_eq!(hosts(), vec!["Badges=10.0.0.1", "Desk-2=10.0.0.2"]);
+}
+
+#[test]
+fn release_skips_a_configured_queue_cups_does_not_know() {
+    let h = H::new();
+    let d = h.dir.path().display();
+    std::fs::write(h.dir.path().join("lpstat.out"), LPSTAT).unwrap();
+    h.tool(
+        "lpstat",
+        &format!(
+            "case \"$3\" in Gone) echo 'lpstat: Invalid destination name' >&2; exit 1;; esac; cat {d}/lpstat.out"
+        ),
+    );
+    h.tool("lp", &format!("echo \"$@\" >> {d}/lp.args"));
+    std::fs::write(
+        h.cfg(),
+        "[printer]\nhost = \"192.0.2.1\"\n[[printers]]\nqueue = \"Gone\"\nhost = \"192.0.2.2\"\n",
+    )
+    .unwrap();
+    let o = h.run(&["release-held-jobs", "--dry-run", "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let j = json(&o);
+    assert_eq!(j["held"], serde_json::json!(["TM-C3500-12", "TM-C3500-15"]));
+    assert!(j["warnings"][0].as_str().unwrap().contains("Gone"), "{j}");
+    // asked for explicitly, a missing queue is an error
+    assert_eq!(
+        h.run(&["release-held-jobs", "--dry-run", "--queue", "Gone"])
+            .status
+            .code(),
+        Some(1)
+    );
+    // the error path reports the queues the same way as success
+    let o = h.run(&["release-held-jobs", "--json", "--job", "99"]);
+    assert_eq!(o.status.code(), Some(1));
+    let j = json(&o);
+    assert_eq!(j["queues"], serde_json::json!(["TM-C3500"]), "{j}");
+}
