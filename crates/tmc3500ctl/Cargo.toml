@@ -30,14 +30,14 @@ suggests = "msmtp, curl, prometheus-node-exporter"
 section = "text"
 priority = "optional"
 maintainer-scripts = "../../packaging/debian/"
-conf-files = ["/etc/tmc3500/tmc3500.toml", "/etc/tmc3500/alert.d/50-syslog", "/etc/tmc3500/alert.d/60-mail", "/etc/tmc3500/alert.d/70-webhook", "/etc/apparmor.d/tmc3500"]
+conf-files = ["/etc/tmc3500/alert.d/50-syslog", "/etc/tmc3500/alert.d/60-mail", "/etc/tmc3500/alert.d/70-webhook", "/etc/apparmor.d/tmc3500"]
 assets = [
     ["target/release/rastertotmc3500", "usr/lib/cups/filter/", "755"],
     ["target/release/tmc3500", "usr/lib/cups/backend/", "755"],
     ["target/release/tmc3500-monitor", "usr/bin/", "755"],
     ["target/release/tmc3500ctl", "usr/bin/", "755"],
     ["../../packaging/ppd/tmc3500.ppd", "usr/share/ppd/tmc3500/", "644"],
-    ["../../packaging/tmc3500.toml", "etc/tmc3500/", "644"],
+    ["../../packaging/tmc3500.toml", "usr/share/tmc3500/tmc3500.toml.example", "644"],
     ["../../packaging/alert.d/50-syslog", "etc/tmc3500/alert.d/", "755"],
     ["../../packaging/alert.d/60-mail", "etc/tmc3500/alert.d/", "755"],
     ["../../packaging/alert.d/70-webhook", "etc/tmc3500/alert.d/", "755"],

@@ -77,6 +77,9 @@ To inspect a job file, run `python3 tools/escpdump.py <file.prn>` (command listi
   `rastertotmc3500::colour_table_name`). A missing table falls back to provisional colours with a log
   line instead of failing the job. Check the job log after changing names.
 - **CUPS device URI:** a query string needs a path first: `tmc3500://host:9100/?snmp-port=1161`.
+- **The config is not a dpkg conffile** (since `setup` rewrites it). postinst creates it from
+  `/usr/share/tmc3500/tmc3500.toml.example` only when missing, so a change to
+  `packaging/tmc3500.toml` reaches new installs only. Don't add it back to `conf-files`.
 - **cupsd in the dev container:** right after `cupsctl` restarts cupsd, `lp` can report that the
   queue doesn't exist. Retry after a second.
 

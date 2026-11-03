@@ -7,6 +7,8 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 fi
 if [ "$1" = purge ]; then
     rm -rf /var/lib/tmc3500
+    rm -f /etc/tmc3500/tmc3500.toml
+    rmdir /etc/tmc3500 2>/dev/null || true
     if getent passwd tmc3500 >/dev/null && command -v deluser >/dev/null; then
         deluser --system tmc3500 >/dev/null 2>&1 || true
     fi

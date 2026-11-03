@@ -121,3 +121,60 @@ fn webhook_hook() {
     assert!(r.contains("--data-binary @-"), "{r}");
     assert!(r.contains("{\"event\":\"media-out\"}"), "{r}");
 }
+
+/// `tmc3500ctl setup` rewrites the config, so it must not be a dpkg conffile: a changed shipped
+/// copy would make every upgrade stop at a "keep or replace?" prompt (unattended upgrades fail).
+/// The package ships an example and postinst creates the config only when it is missing.
+#[test]
+fn config_is_not_a_conffile_and_is_created_only_when_missing() {
+    let cargo =
+        std::fs::read_to_string(packaging().join("../crates/tmc3500ctl/Cargo.toml")).unwrap();
+    let conf_files = cargo.lines().find(|l| l.starts_with("conf-files")).unwrap();
+    assert!(!conf_files.contains("tmc3500.toml"), "{conf_files}");
+    assert!(
+        cargo.contains(
+            r#"["../../packaging/tmc3500.toml", "usr/share/tmc3500/tmc3500.toml.example", "644"]"#
+        ),
+        "example config not shipped under /usr/share"
+    );
+    assert!(
+        !cargo.contains(r#""etc/tmc3500/", "644"]"#),
+        "config still shipped into /etc"
+    );
+
+    // Run the postinst snippet against a temporary root: creates when missing, keeps when present.
+    let d = tempfile::tempdir().unwrap();
+    let example = d.path().join("example.toml");
+    std::fs::write(&example, "# shipped\n").unwrap();
+    let etc = d.path().join("etc");
+    let run = || {
+        let ok = Command::new("sh")
+            .arg(packaging().join("debian/postinst"))
+            .arg("configure")
+            .env("TMC3500_POSTINST_CONFIG_ONLY", "1")
+            .env("TMC3500_EXAMPLE", &example)
+            .env("TMC3500_ETC", &etc)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    };
+    run();
+    let cfg = etc.join("tmc3500.toml");
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), "# shipped\n");
+    assert_eq!(
+        std::fs::metadata(&cfg).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    std::fs::write(&cfg, "# edited by setup\n").unwrap();
+    run();
+    assert_eq!(
+        std::fs::read_to_string(&cfg).unwrap(),
+        "# edited by setup\n"
+    );
+
+    let postrm = std::fs::read_to_string(packaging().join("debian/postrm")).unwrap();
+    assert!(
+        postrm.contains("rm -f /etc/tmc3500/tmc3500.toml"),
+        "purge must remove the config"
+    );
+}

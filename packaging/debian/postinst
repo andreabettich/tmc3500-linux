@@ -1,6 +1,22 @@
 #!/bin/sh
 set -e
+# The config is not a dpkg conffile: `tmc3500ctl setup` rewrites it, and a conffile would make
+# upgrades stop at a "keep or replace?" prompt. Create it from the example only when missing.
+# (Upgrades from 0.1.0-1, where it was a conffile, keep the existing file.)
+create_config() {
+    example=${TMC3500_EXAMPLE:-/usr/share/tmc3500/tmc3500.toml.example}
+    etc=${TMC3500_ETC:-/etc/tmc3500}
+    if [ ! -e "$etc/tmc3500.toml" ] && [ ! -L "$etc/tmc3500.toml" ]; then
+        install -d -m 0755 "$etc"
+        install -m 0644 "$example" "$etc/tmc3500.toml"
+    fi
+}
+if [ "$1" = configure ] && [ "${TMC3500_POSTINST_CONFIG_ONLY:-}" = 1 ]; then
+    create_config
+    exit 0
+fi
 if [ "$1" = configure ]; then
+    create_config
     if ! getent passwd tmc3500 >/dev/null; then
         adduser --system --group --no-create-home --home /nonexistent tmc3500
     fi
