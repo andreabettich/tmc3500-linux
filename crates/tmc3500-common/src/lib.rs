@@ -4,6 +4,7 @@
 pub mod alert;
 pub mod config;
 pub mod cups;
+pub mod markers;
 pub mod net;
 pub mod snmp;
 pub mod time;

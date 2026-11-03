@@ -540,3 +540,33 @@ fn snmp_reply_without_status_values_is_not_ok() {
     let r = h.run_file();
     assert_eq!(r.code, 3, "{}", r.stderr);
 }
+
+#[test]
+fn sigterm_after_partial_send_marks_the_job_and_a_restart_is_held() {
+    // cupsd also sends SIGTERM on shutdown/restart and later restarts the job from the start
+    let h = H::new(&big_job());
+    h.fake.set_paper_out_after(Some(100_000));
+    let child = h.spawn_file(&h.uri());
+    wait_for("stall", Duration::from_secs(10), || h.fake.is_stalled());
+    kill_term(child.id());
+    let r = finish(child, Duration::from_secs(5));
+    assert_eq!(r.code, 5, "{}", r.stderr);
+    assert!(r.stderr.contains("ERROR: "), "{}", r.stderr);
+    assert!(h.dir.path().join("state/partial-job-42").exists());
+    assert!(
+        h.alert_names().contains(&"job-failed".to_string()),
+        "{:?}",
+        h.alert_names()
+    );
+    h.fake.set_paper_out(false);
+    wait_for("fake idle", Duration::from_secs(5), || {
+        !h.fake.is_receiving()
+    });
+    let before = h.fake.connection_count();
+    // the same job id comes back: held, nothing sent
+    let r = h.run_file();
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(r.stderr.contains("partially sent"), "{}", r.stderr);
+    assert_eq!(h.fake.connection_count(), before);
+    assert!(h.alert_names().contains(&"job-held".to_string()));
+}

@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use tmc3500_common::alert::{Alerter, ConditionTracker, Delivery, Event, HookOutcome};
 use tmc3500_common::config::Config;
 use tmc3500_common::cups::*;
+use tmc3500_common::markers;
 use tmc3500_common::snmp::{resolve, SnmpClient};
 use tmc3500_common::uri::DeviceUri;
 use tmc3500_core::status::epson::{self, EpsonReply};
@@ -95,7 +96,10 @@ enum SendError {
     Stalled {
         sent: u64,
     },
-    Input(std::io::Error),
+    Input {
+        sent: u64,
+        err: std::io::Error,
+    },
 }
 
 enum ConnectError {
@@ -118,10 +122,44 @@ struct Backend {
     alerter: Alerter,
     tracker: ConditionTracker,
     thr: Thresholds,
+    stdin: Option<Box<dyn Read>>,
+}
+
+/// Process environment the backend reads.
+#[derive(Debug, Clone)]
+pub struct Env {
+    /// `DEVICE_URI`.
+    pub device_uri: Option<String>,
+    /// `$TMC3500_CONFIG` or the default config path.
+    pub config_path: std::path::PathBuf,
+}
+
+impl Env {
+    pub fn from_process() -> Env {
+        Env {
+            device_uri: std::env::var("DEVICE_URI").ok(),
+            config_path: Config::path_from_env(),
+        }
+    }
 }
 
 /// Entry point used by `main`: returns the process exit code.
 pub fn run(args: Vec<std::ffi::OsString>, cancel: Arc<AtomicBool>) -> i32 {
+    run_with(
+        args,
+        cancel,
+        &Env::from_process(),
+        Box::new(std::io::stdin()),
+    )
+}
+
+/// [`run`] with explicit environment and stdin (for tests).
+pub fn run_with(
+    args: Vec<std::ffi::OsString>,
+    cancel: Arc<AtomicBool>,
+    env: &Env,
+    stdin: Box<dyn Read>,
+) -> i32 {
     let log = Log::stderr();
     let job = match parse_args(&args) {
         Ok(None) => {
@@ -134,19 +172,18 @@ pub fn run(args: Vec<std::ffi::OsString>, cancel: Arc<AtomicBool>) -> i32 {
             return CUPS_BACKEND_FAILED;
         }
     };
-    let (cfg, cfg_path) = match Config::load_default() {
+    let cfg_path = env.config_path.clone();
+    let cfg = match Config::load(&cfg_path) {
         Ok(c) => c,
         Err(e) => {
-            log.error(&format!(
-                "configuration {}: {e}",
-                Config::path_from_env().display()
-            ));
+            log.error(&format!("configuration {}: {e}", cfg_path.display()));
             return CUPS_BACKEND_STOP;
         }
     };
     log.debug(&format!("configuration {}", cfg_path.display()));
-    let uri_s = std::env::var("DEVICE_URI")
-        .ok()
+    let uri_s = env
+        .device_uri
+        .clone()
         .or_else(|| args.first().map(|a| a.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let uri = match DeviceUri::parse(&uri_s) {
@@ -193,6 +230,7 @@ pub fn run(args: Vec<std::ffi::OsString>, cancel: Arc<AtomicBool>) -> i32 {
         alerter,
         tracker: ConditionTracker::default(),
         thr,
+        stdin: Some(stdin),
     };
     b.run_job()
 }
@@ -436,7 +474,10 @@ impl Backend {
                         Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                         Err(e) => {
                             pending.clear();
-                            return Err(SendError::Input(e));
+                            return Err(SendError::Input {
+                                sent: total,
+                                err: e,
+                            });
                         }
                     }
                 };
@@ -617,8 +658,20 @@ impl Backend {
                     return CUPS_BACKEND_FAILED;
                 }
             },
-            None => Box::new(std::io::stdin()),
+            None => match self.stdin.take() {
+                Some(s) => s,
+                None => Box::new(std::io::empty()),
+            },
         };
+        let state_dir = self.cfg.alerts.state_dir.clone();
+        if let Some(m) = markers::read_marker(&state_dir, &self.job.job_id) {
+            let msg = format!(
+                "Job {} was already partially sent to the printer in an earlier attempt ({}); held instead of printing it again. Check the printer output; if labels are missing release it with `tmc3500ctl release-held-jobs --job <id>` (which clears the marker), otherwise cancel it.",
+                self.job.job_id,
+                m.trim()
+            );
+            return self.hold(EventKind::JobHeld, "", &msg);
+        }
         self.log.info(&format!(
             "Printing job {} to {}",
             self.job.job_id,
@@ -651,6 +704,10 @@ impl Backend {
                 Ok(total) => {
                     drop(stream);
                     self.log.info(&format!("Job sent ({total} bytes)"));
+                    if let Err(e) = markers::remove_marker(&state_dir, &self.job.job_id) {
+                        self.log
+                            .warning(&format!("cannot remove partial-send marker: {e}"));
+                    }
                     self.final_status();
                     return CUPS_BACKEND_OK;
                 }
@@ -658,7 +715,16 @@ impl Backend {
                     let _ = stream.shutdown(Shutdown::Both);
                     return self.cancelled_exit(sent);
                 }
-                Err(SendError::Input(e)) => {
+                Err(SendError::Input { sent, err: e }) if sent > 0 => {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    self.mark_partial(sent, &format!("job data unreadable: {e}"));
+                    let msg = format!(
+                        "Cannot read job data after sending {sent} bytes ({e}); the printer may have printed part of the job. Job {} held and NOT reprinted automatically.",
+                        self.job.job_id
+                    );
+                    return self.hold(EventKind::JobHeld, "", &msg);
+                }
+                Err(SendError::Input { err: e, .. }) => {
                     let _ = stream.shutdown(Shutdown::Both);
                     self.log.error(&format!("cannot read job data: {e}"));
                     self.alert(
@@ -686,6 +752,7 @@ impl Backend {
                     }
                 }
                 Err(SendError::Lost { sent, err }) => {
+                    self.mark_partial(sent, &format!("connection lost: {err}"));
                     let msg = format!(
                         "Connection to the printer lost after sending {sent} bytes ({err}); the printer may have printed part of the job. Job {} held and NOT reprinted automatically: check the printer output, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
                         self.job.job_id
@@ -694,6 +761,9 @@ impl Backend {
                 }
                 Err(SendError::Stalled { sent }) => {
                     let _ = stream.shutdown(Shutdown::Both);
+                    if sent > 0 {
+                        self.mark_partial(sent, "printer stalled");
+                    }
                     let msg = format!(
                         "Printer stopped accepting data after {sent} bytes without reporting an error. Job {} held and NOT reprinted automatically: check the printer, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
                         self.job.job_id
@@ -704,7 +774,35 @@ impl Backend {
         }
     }
 
+    /// Record that `sent` bytes of this job reached the printer (see [`markers`]).
+    fn mark_partial(&self, sent: u64, why: &str) {
+        let text = format!(
+            "job {} partially sent ({sent} bytes) at {}: {why}\n",
+            self.job.job_id,
+            tmc3500_common::time::rfc3339(tmc3500_common::time::unix_now())
+        );
+        if let Err(e) = markers::write_marker(&self.cfg.alerts.state_dir, &self.job.job_id, &text) {
+            self.log.error(&format!(
+                "cannot write partial-send marker in {}: {e}; a restarted job will NOT be detected as a duplicate",
+                self.cfg.alerts.state_dir.display()
+            ));
+        }
+    }
+
     fn cancelled_exit(&mut self, sent: u64) -> i32 {
+        if sent > 0 {
+            let msg = format!(
+                "Job {} stopped (SIGTERM) after {sent} bytes were sent: the printer may have printed part of it. If CUPS restarts this job it will be held, not reprinted.",
+                self.job.job_id
+            );
+            self.log.error(&msg);
+            self.mark_partial(sent, "stopped by SIGTERM");
+            self.alert(
+                EventKind::JobFailed,
+                &format!("job-failed:{}", self.job.job_id),
+                &msg,
+            );
+        }
         self.log.info(&format!(
             "Job {} cancelled (SIGTERM) after {sent} bytes sent",
             self.job.job_id
@@ -741,6 +839,66 @@ mod tests {
             .unwrap();
         assert_eq!(j.copies, 3);
         assert_eq!(j.file.as_deref(), Some(std::path::Path::new("/f")));
+    }
+
+    /// Yields `data`, then fails after `fail_after` bytes.
+    struct FailingReader {
+        data: Vec<u8>,
+        pos: usize,
+        fail_after: usize,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos >= self.fail_after {
+                return Err(std::io::Error::other("filter crashed"));
+            }
+            let n = buf
+                .len()
+                .min(self.fail_after - self.pos)
+                .min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn input_error_after_partial_send_holds_and_marks() {
+        let fake = tmc3500_fakeprinter::FakePrinter::start_local().unwrap();
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("state")).unwrap();
+        let cfg = d.path().join("c.toml");
+        std::fs::write(
+            &cfg,
+            format!(
+                "[snmp]\ntimeout_ms = 200\n[backend]\nstatus_interval_ms = 50\nio_timeout_ms = 300\n\
+                 [alerts]\ndir = \"{0}/none\"\nstate_dir = \"{0}/state\"\n",
+                d.path().display()
+            ),
+        )
+        .unwrap();
+        let env = Env {
+            device_uri: Some(format!(
+                "tmc3500://127.0.0.1:{}?snmp-port={}",
+                fake.job_port(),
+                fake.snmp_port()
+            )),
+            config_path: cfg,
+        };
+        let input = FailingReader {
+            data: vec![0u8; 1 << 20],
+            pos: 0,
+            fail_after: 300_000,
+        };
+        let code = run_with(
+            os(&["tmc3500", "42", "u", "t", "1", ""]),
+            Arc::new(AtomicBool::new(false)),
+            &env,
+            Box::new(input),
+        );
+        assert_eq!(code, CUPS_BACKEND_HOLD);
+        assert!(d.path().join("state/partial-job-42").exists());
     }
 
     #[test]
