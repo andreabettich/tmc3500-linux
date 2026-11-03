@@ -526,6 +526,8 @@ pub struct PrinterStatus {
     pub device: Option<DeviceStatus>,
     pub printer: Option<PrinterState>,
     pub errors: DetectedErrors,
+    /// True if hrPrinterDetectedErrorState was present in the reply.
+    pub errors_known: bool,
     pub supplies: Vec<Supply>,
     pub life_count: Option<u64>,
     pub power_on_count: Option<u64>,
@@ -581,6 +583,7 @@ impl PrinterStatus {
                 oids::HR_PRINTER_DETECTED_ERROR_STATE => {
                     if let Some(b) = vb.value.as_bytes() {
                         st.errors = DetectedErrors::from_octets(b);
+                        st.errors_known = true;
                     }
                 }
                 oids::PRT_MARKER_LIFE_COUNT => st.life_count = uint(&vb.value),
@@ -648,6 +651,12 @@ impl PrinterStatus {
     /// Add the details from an Epson status reply (see [`super::epson`]).
     pub fn merge_epson(&mut self, e: EpsonStatus) {
         self.epson = Some(e);
+    }
+
+    /// True if the reply carried the core status values (hrDeviceStatus, hrPrinterStatus and
+    /// hrPrinterDetectedErrorState). Without them the printer state is unknown, not "OK".
+    pub fn has_core_status(&self) -> bool {
+        self.device.is_some() && self.printer.is_some() && self.errors_known
     }
 
     pub fn device_status_or_unknown(&self) -> DeviceStatus {

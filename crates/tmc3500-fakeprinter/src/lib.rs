@@ -36,6 +36,8 @@ pub enum SnmpMode {
     Garbage,
     /// Never reply.
     Silent,
+    /// Answer, but without any status values (every OID is noSuchInstance).
+    NoStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +94,8 @@ struct State {
     drop_after: Option<u64>,
     slow_read: Option<(usize, Duration)>,
     refuse: bool,
+    /// Stop reading the job socket without reporting any error (SNMP shows "printing").
+    paused: bool,
     snmp_mode: SnmpMode,
     reply: Vec<u8>,
     jobs: Vec<JobRecord>,
@@ -116,6 +120,7 @@ impl Default for State {
             drop_after: None,
             slow_read: None,
             refuse: false,
+            paused: false,
             snmp_mode: SnmpMode::Normal,
             reply: Vec::new(),
             jobs: Vec::new(),
@@ -273,6 +278,10 @@ impl FakePrinter {
         self.with(|s| s.slow_read = v.map(|(c, d)| (c.max(1), d)))
     }
     /// Close the listening socket (connections are refused) until cleared.
+    /// Stop reading job data without any error state (a busy or hung printer).
+    pub fn set_paused(&self, on: bool) {
+        self.with(|s| s.paused = on)
+    }
     pub fn set_refuse(&self, on: bool) {
         self.with(|s| s.refuse = on)
     }
@@ -327,6 +336,7 @@ impl FakePrinter {
             "cover" => self.set_cover_open(parse_on_off(a1)?),
             "offline" => self.set_offline(parse_on_off(a1)?),
             "refuse" => self.set_refuse(parse_on_off(a1)?),
+            "pause" => self.set_paused(parse_on_off(a1)?),
             "ink" => {
                 let c = a1.and_then(parse_color).ok_or("unknown ink colour")?;
                 self.set_ink(c, parse_percent(a2)?)
@@ -347,6 +357,7 @@ impl FakePrinter {
                 Some("normal") => SnmpMode::Normal,
                 Some("garbage") => SnmpMode::Garbage,
                 Some("silent") => SnmpMode::Silent,
+                Some("no-status") => SnmpMode::NoStatus,
                 _ => return Err("usage: snmp normal|garbage|silent".into()),
             }),
             "jobs" => {
@@ -432,7 +443,7 @@ fn handle_job(sh: &Shared, mut stream: TcpStream, n_accepted: &mut usize) {
         }
         let (chunk, delay) = {
             let mut s = sh.lock();
-            if s.blocked() {
+            if s.blocked() || s.paused {
                 s.stalled = true;
                 drop(s);
                 std::thread::sleep(POLL);
@@ -682,6 +693,10 @@ fn snmp_loop(sh: Arc<Shared>, sock: UdpSocket) {
         }
         let out = match mode {
             SnmpMode::Silent => continue,
+            SnmpMode::NoStatus => match snmp::encode(&answer(&req, &BTreeMap::new())) {
+                Ok(b) => b,
+                Err(_) => continue,
+            },
             SnmpMode::Garbage => garbage(gc, &req),
             SnmpMode::Normal => match snmp::encode(&answer(&req, &table)) {
                 Ok(b) => b,

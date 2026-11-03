@@ -377,3 +377,20 @@ fn oid_constants_are_valid() {
         assert!(Oid::parse(o).is_ok(), "{o}");
     }
 }
+
+#[test]
+fn core_status_presence() {
+    assert!(PrinterStatus::from_varbinds(&healthy()).has_core_status());
+    assert!(!PrinterStatus::from_varbinds(&[]).has_core_status());
+    // supplies alone are not enough to call the printer OK
+    let only_supplies: Vec<_> = healthy().into_iter().skip(3).collect();
+    assert!(!PrinterStatus::from_varbinds(&only_supplies).has_core_status());
+    let mistyped = with(
+        healthy(),
+        vec![vb(
+            oids::HR_PRINTER_DETECTED_ERROR_STATE,
+            Value::NoSuchInstance,
+        )],
+    );
+    assert!(!PrinterStatus::from_varbinds(&mistyped).has_core_status());
+}

@@ -499,3 +499,44 @@ fn missing_job_file_fails() {
     );
     assert_eq!(r.code, 1, "{}", r.stderr);
 }
+
+/// A TCP peer that accepts the job connection but never reads (exp1 of the review).
+fn non_reading_listener() -> (u16, std::thread::JoinHandle<()>) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let t = std::thread::spawn(move || {
+        let (s, _) = l.accept().unwrap();
+        std::thread::sleep(Duration::from_secs(8));
+        drop(s);
+    });
+    (port, t)
+}
+
+#[test]
+fn job_stuck_in_local_send_buffer_is_not_reported_printed() {
+    // SNMP says idle and OK, but the peer never reads: data stays in our send queue.
+    let h = H::new(&big_job());
+    let (port, _t) = non_reading_listener();
+    let uri = format!(
+        "tmc3500://127.0.0.1:{port}?snmp-port={}",
+        h.fake.snmp_port()
+    );
+    let r = finish(h.spawn_file(&uri), Duration::from_secs(20));
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        !r.stderr.contains("assuming the job was received"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn snmp_reply_without_status_values_is_not_ok() {
+    // The printer took the bytes into its buffer but never finished; SNMP answers but has no
+    // status values: that must count as "status unknown", not as "printer OK".
+    let h = H::new(&capture("000_default_t1.prn"));
+    h.fake.set_snmp_mode(SnmpMode::NoStatus);
+    h.fake.set_paused(true);
+    let r = h.run_file();
+    assert_eq!(r.code, 3, "{}", r.stderr);
+}

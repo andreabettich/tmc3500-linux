@@ -262,7 +262,16 @@ impl Backend {
             self.next_poll = Some(Instant::now() + interval);
             return None;
         };
-        match client.query_status() {
+        let res = client.query_status().and_then(|st| {
+            if st.has_core_status() {
+                Ok(st)
+            } else {
+                Err(tmc3500_common::snmp::ClientError::Io(
+                    "reply has no printer status values".into(),
+                ))
+            }
+        });
+        match res {
             Ok(st) => {
                 if self.snmp_ok == Some(false) {
                     self.log.info("SNMP status available again");
@@ -492,6 +501,7 @@ impl Backend {
         let mut discarded = 0usize;
         let mut buf = vec![0u8; 4096];
         let mut quiet = Instant::now();
+        let mut last_queue: Option<u64> = None;
         let drain_timeout = self.cfg.backend.drain_timeout();
         let stall_timeout = self.cfg.backend.stall_timeout();
         let result = loop {
@@ -512,14 +522,25 @@ impl Backend {
                         .last_status
                         .as_ref()
                         .is_some_and(|s| s.printer == Some(PrinterState::Printing));
+                    // Bytes still in our send queue were never received by the printer.
+                    let queue = tmc3500_common::net::send_queue(stream);
+                    if let (Some(q), Some(prev)) = (queue, last_queue) {
+                        if q < prev {
+                            quiet = Instant::now();
+                        }
+                    }
+                    last_queue = queue;
                     if blocking == Some(true) || printing {
                         quiet = Instant::now();
-                    } else if blocking == Some(false) && quiet.elapsed() >= drain_timeout {
+                    } else if blocking == Some(false)
+                        && queue == Some(0)
+                        && quiet.elapsed() >= drain_timeout
+                    {
                         self.log.warning(
-                            "Printer did not close the connection; status is OK, assuming the job was received",
+                            "Printer did not close the connection; all data was acknowledged and the status is OK, assuming the job was received",
                         );
                         break Ok(total);
-                    } else if blocking.is_none() && quiet.elapsed() >= stall_timeout {
+                    } else if quiet.elapsed() >= stall_timeout {
                         break Err(SendError::Stalled { sent: total });
                     }
                 }
