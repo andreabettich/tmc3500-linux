@@ -106,3 +106,26 @@ fn ppd_defaults_are_the_windows_defaults() {
         JobConfig::default()
     );
 }
+
+#[test]
+fn rejected_combinations_are_constrained_in_the_ppd() {
+    let text = ppd();
+    let opts = ui_options(&text);
+    let keys = ["TmCoating", "TmQuality", "TmMediaForm", "TmAfterPrint"];
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            for ca in &opts[*a].1 {
+                for cb in &opts[*b].1 {
+                    if JobConfig::from_cups(&format!("{a}={ca} {b}={cb}"), 1).is_err() {
+                        for line in [
+                            format!("*UIConstraints: *{a} {ca} *{b} {cb}"),
+                            format!("*UIConstraints: *{b} {cb} *{a} {ca}"),
+                        ] {
+                            assert!(text.lines().any(|l| l == line), "missing `{line}`");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

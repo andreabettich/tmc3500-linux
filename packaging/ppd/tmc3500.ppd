@@ -337,3 +337,11 @@
 *TmBrightness 1/+1: ""
 *TmBrightness 2/+2: ""
 *CloseUI: *TmBrightness
+
+*% Combinations the Windows driver does not allow (the filter rejects them).
+*UIConstraints: *TmCoating Plain *TmQuality Quality1
+*UIConstraints: *TmQuality Quality1 *TmCoating Plain
+*UIConstraints: *TmCoating Plain *TmQuality Quality2
+*UIConstraints: *TmQuality Quality2 *TmCoating Plain
+*UIConstraints: *TmCoating Wristband *TmQuality Quality2
+*UIConstraints: *TmQuality Quality2 *TmCoating Wristband
