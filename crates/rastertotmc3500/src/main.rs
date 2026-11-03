@@ -7,6 +7,10 @@ fn main() {
         ppd: std::env::var("PPD")
             .ok()
             .and_then(|p| rastertotmc3500::read_ppd(&p)),
+        colour_dir: Some(
+            std::env::var_os("TMC3500_COLOUR_DIR")
+                .map_or_else(|| "/usr/share/tmc3500/colour".into(), Into::into),
+        ),
         unix_secs: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())

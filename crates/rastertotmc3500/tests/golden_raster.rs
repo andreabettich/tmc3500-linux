@@ -166,6 +166,7 @@ fn filter_output_matches_every_capture() {
         .collect();
     let env = rastertotmc3500::Env {
         ppd: None,
+        colour_dir: None,
         unix_secs: 0,
         host_id: rastertotmc3500::FALLBACK_HOST_ID,
     };

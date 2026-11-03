@@ -95,6 +95,8 @@ pub fn meta(unix_secs: u64, job_id: u32, host: [u8; 6]) -> JobMeta {
 
 pub struct Env {
     pub ppd: Option<String>,
+    /// Directory with fitted colour tables (`None` = provisional colours only).
+    pub colour_dir: Option<std::path::PathBuf>,
     pub unix_secs: u64,
     pub host_id: [u8; 6],
 }
@@ -141,7 +143,7 @@ fn run_inner<R: Read, W: Write, L: Write>(
         .unwrap_or_default();
     let options = format!("{defaults} {header_size} {}", args[5]);
     let cfg = JobConfig::from_cups(&options, copies).map_err(|e| e.to_string())?;
-    let conv = Converter::new(&cfg.color, cfg.black);
+    let conv = converter(&cfg, env.colour_dir.as_deref(), log);
     let mut jw = JobWriter::begin(
         std::io::BufWriter::new(out),
         &cfg,
@@ -205,6 +207,76 @@ fn write_pages<R: Read, W: Write, L: Write>(
     Ok(())
 }
 
+/// File name of the colour table for a job: `{coating}-{quality}-{mode}.lut`.
+pub fn colour_table_name(cfg: &JobConfig) -> String {
+    use tmc3500_core::options::{Coating, ColorMode, Gamma, Quality};
+    let coating = match cfg.coating {
+        Coating::Plain => "plain",
+        Coating::Matte => "matte",
+        Coating::Synthetic => "synthetic",
+        Coating::Wristband => "wristband",
+        Coating::Glossy => "glossy",
+    };
+    let quality = match cfg.quality {
+        Quality::Speed => "speed",
+        Quality::Quality1 => "q1",
+        Quality::Quality2 => "q2",
+    };
+    let mode = match (cfg.color.mode, cfg.color.gamma) {
+        (ColorMode::Off, _) => "off",
+        (_, Gamma::G18) => "gamma18",
+        (ColorMode::Standard, _) => "standard",
+        (ColorMode::Preferred, _) => "preferred",
+    };
+    format!("{coating}-{quality}-{mode}.lut")
+}
+
+/// Colour converter for the job: the fitted table if one is installed, else the provisional formula.
+pub fn converter<L: Write>(
+    cfg: &JobConfig,
+    dir: Option<&std::path::Path>,
+    log: &mut L,
+) -> Converter {
+    let name = colour_table_name(cfg);
+    let Some(path) = dir.map(|d| d.join(&name)) else {
+        return Converter::new(&cfg.color, cfg.black);
+    };
+    let bytes = match std::fs::File::open(&path) {
+        Ok(f) => {
+            let mut b = Vec::new();
+            match f.take(1 << 20).read_to_end(&mut b) {
+                Ok(_) => b,
+                Err(e) => {
+                    let _ = writeln!(
+                        log,
+                        "WARNING: cannot read colour table {}: {e}; using provisional colours",
+                        path.display()
+                    );
+                    return Converter::new(&cfg.color, cfg.black);
+                }
+            }
+        }
+        Err(_) => {
+            let _ = writeln!(
+                log,
+                "INFO: no colour table {name}; using provisional colours"
+            );
+            return Converter::new(&cfg.color, cfg.black);
+        }
+    };
+    match tmc3500_core::color::Lut::parse(&bytes) {
+        Ok(lut) => Converter::with_lut(&cfg.color, cfg.black, lut),
+        Err(e) => {
+            let _ = writeln!(
+                log,
+                "WARNING: {e} in {}; using provisional colours",
+                path.display()
+            );
+            Converter::new(&cfg.color, cfg.black)
+        }
+    }
+}
+
 pub fn read_ppd(path: &str) -> Option<String> {
     let f = std::fs::File::open(path).ok()?;
     let mut s = String::new();
@@ -241,5 +313,57 @@ mod tests {
         assert_eq!(host_id(""), FALLBACK_HOST_ID);
         assert_eq!(host_id("abc\n"), host_id("abc"));
         assert_ne!(host_id("abc"), host_id("abd"));
+    }
+
+    #[test]
+    fn colour_table_names() {
+        let n = |o: &str| colour_table_name(&JobConfig::from_cups(o, 1).unwrap());
+        assert_eq!(n(""), "matte-speed-preferred.lut");
+        assert_eq!(
+            n("TmCoating=Glossy TmQuality=Quality2"),
+            "glossy-q2-preferred.lut"
+        );
+        assert_eq!(n("TmColorMode=Standard"), "matte-speed-standard.lut");
+        assert_eq!(n("TmGamma=1.8"), "matte-speed-gamma18.lut");
+        assert_eq!(n("TmColorMode=Off TmGamma=1.8"), "matte-speed-off.lut");
+    }
+
+    #[test]
+    fn uses_the_colour_table_when_present() {
+        use tmc3500_core::color::Lut;
+        let dir = std::env::temp_dir().join(format!("tmc3500-lut-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // every colour except white → large black drops only
+        let nodes = (0..27)
+            .map(|i| {
+                if i == 26 {
+                    [[0; 3]; 4]
+                } else {
+                    [[0, 0, 65535], [0; 3], [0; 3], [0; 3]]
+                }
+            })
+            .collect();
+        std::fs::write(
+            dir.join("matte-speed-preferred.lut"),
+            Lut::from_nodes(3, nodes).unwrap().to_bytes(),
+        )
+        .unwrap();
+        let cfg = JobConfig::default();
+        let mut log = Vec::new();
+        let conv = converter(&cfg, Some(&dir), &mut log);
+        assert_eq!(
+            conv.drops([0, 255, 255]),
+            [[0, 0, 65535], [0; 3], [0; 3], [0; 3]]
+        );
+        // corrupt table: warning and provisional colours
+        std::fs::write(dir.join("matte-speed-preferred.lut"), b"TMCLUT1junk").unwrap();
+        let conv = converter(&cfg, Some(&dir), &mut log);
+        assert_eq!(conv.drops([0, 255, 255])[1], [0, 0, 65535]);
+        let log = String::from_utf8(log).unwrap();
+        assert!(
+            log.contains("WARNING:") && log.contains("matte-speed-preferred.lut"),
+            "{log}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
