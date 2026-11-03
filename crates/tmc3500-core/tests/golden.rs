@@ -121,6 +121,11 @@ fn command_skeleton_matches_windows_byte_for_byte() {
             eprintln!("skip {name}: {reason}");
             continue;
         }
+        if e.options.contains("TmMediaSaving") {
+            // page length depends on the printed area: covered by the filter golden test
+            eprintln!("skip {name}: media saving needs raster data");
+            continue;
+        }
         let row = &m[name];
         let capture = std::fs::read(root().join(format!("captures/{name}.prn"))).unwrap();
         let cfg = match JobConfig::from_cups(&e.options, e.copies.unwrap_or(row.copies)) {

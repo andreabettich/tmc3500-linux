@@ -1,5 +1,6 @@
 # CUPS options that reproduce each Windows capture (see testdata/captures/NOTES.md).
 # skip = reason → excluded with that reason. copies overrides manifest.csv (driver-dialog copies).
+# raster = "skip" → filter golden test compares only the command skeleton, not the raster block structure.
 
 [captures]
 "000_default_t1" = {}
@@ -30,11 +31,11 @@
 "302_form_continuous_label" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel" }
 "303_form_continuous_paper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper" }
 "304_form_continuous_paper_blackmark" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaperBlackMark" }
-"305_save_lower_contlabel" = { skip = "phase 2: media-saving length depends on printed area" }
-"306_save_lowerupper_contlabel" = { skip = "phase 2: media-saving length depends on printed area" }
-"307_save_lower_contpaper" = { skip = "phase 2: media-saving length depends on printed area" }
-"308_save_lowerupper_contpaper" = { skip = "phase 2: media-saving length depends on printed area" }
-"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain" }
+"305_save_lower_contlabel" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmMediaSaving=Lower" }
+"306_save_lowerupper_contlabel" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmMediaSaving=LowerUpper" }
+"307_save_lower_contpaper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper TmMediaSaving=Lower" }
+"308_save_lowerupper_contpaper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper TmMediaSaving=LowerUpper" }
+"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain", raster = "skip" } # Plain colour table moves colour edges (phase 3)
 "311_coating_synthetic" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Synthetic" }
 "312_coating_wristband" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Wristband" }
 "313_coating_glossy" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Glossy" }
@@ -81,9 +82,9 @@
 "506_join_barcodes_off" = {}
 "507_units_mm" = {}
 "508_status_monitor_on" = {}
-"600_reduction_fit" = { options = "fit-to-page=true" }
-"601_reduction_custom_50pct" = { options = "scaling=50" }
-"602_reduction_fit_before_8.27x11.69" = { options = "fit-to-page=true" }
+"600_reduction_fit" = { options = "fit-to-page=true", raster = "skip" } # scaling is done by CUPS
+"601_reduction_custom_50pct" = { options = "scaling=50", raster = "skip" } # scaling is done by CUPS
+"602_reduction_fit_before_8.27x11.69" = { options = "fit-to-page=true", raster = "skip" } # scaling is done by CUPS
 "610_vacuum_manual_default9" = { options = "TmVacuum=9" }
 "611_vacuum_manual_4" = { options = "TmVacuum=4" }
 "612_vacuum_manual_0" = { options = "TmVacuum=0" }
