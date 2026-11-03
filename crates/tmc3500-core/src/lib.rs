@@ -10,6 +10,7 @@ pub mod error;
 pub mod geometry;
 pub mod layout;
 pub mod options;
+pub mod pipeline;
 pub mod protocol;
 pub mod raster;
 pub mod rle;
