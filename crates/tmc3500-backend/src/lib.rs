@@ -11,6 +11,7 @@
 //! - SIGTERM (job cancelled): stop, close the connection, exit 5.
 #![forbid(unsafe_code)]
 
+pub mod alerts;
 pub mod log;
 pub mod reasons;
 
@@ -21,7 +22,7 @@ use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tmc3500_common::alert::{Alerter, ConditionTracker, Delivery, Event, HookOutcome};
+use tmc3500_common::alert::{Alerter, Event};
 use tmc3500_common::config::Config;
 use tmc3500_common::cups::*;
 use tmc3500_common::markers;
@@ -125,8 +126,7 @@ struct Backend {
     last_blocking: Option<bool>,
     last_status: Option<PrinterStatus>,
     reporter: StateReporter,
-    alerter: Alerter,
-    tracker: ConditionTracker,
+    alerts: alerts::AlertWorker,
     thr: Thresholds,
     stdin: Option<Box<dyn Read>>,
     /// (current copy, number of copies).
@@ -224,6 +224,8 @@ pub fn run_with(
         None
     };
     let alerter = Alerter::from_config(&cfg.alerts, ALERT_STATE_FILE);
+    let alerts =
+        alerts::AlertWorker::start(alerter, log.clone(), uri.authority(), job.job_id.clone());
     let thr = cfg.thresholds();
     let mut b = Backend {
         cfg,
@@ -237,14 +239,15 @@ pub fn run_with(
         last_blocking: None,
         last_status: None,
         reporter: StateReporter::default(),
-        alerter,
-        tracker: ConditionTracker::default(),
+        alerts,
         thr,
         stdin: Some(stdin),
         copies: (1, 1),
         prior: 0,
     };
-    b.run_job()
+    let code = b.run_job();
+    b.alerts.finish();
+    code
 }
 
 impl Backend {
@@ -271,38 +274,11 @@ impl Backend {
         self.uri.authority()
     }
 
-    fn log_delivery(&self, ev: &Event, d: &Delivery) {
-        for w in &d.warnings {
-            self.log.warning(&format!("alert: {w}"));
-        }
-        if d.suppressed {
-            self.log
-                .debug(&format!("alert {} suppressed (repeat)", ev.key));
-            return;
-        }
-        self.log.debug(&format!(
-            "alert {} sent to {} hook(s)",
-            ev.key,
-            d.hooks.len()
-        ));
-        for h in &d.hooks {
-            if h.outcome != HookOutcome::Ok {
-                self.log.warning(&format!(
-                    "alert hook {} for {}: {:?}",
-                    h.hook.display(),
-                    ev.event,
-                    h.outcome
-                ));
-            }
-        }
-    }
-
     fn alert(&self, kind: EventKind, key: &str, message: &str) {
         let mut ev = Event::new(kind, key, &self.printer_name(), message, "backend");
         ev.job_id = Some(self.job.job_id.clone());
         ev.reasons = self.reporter.current().to_vec();
-        let d = self.alerter.emit(&ev);
-        self.log_delivery(&ev, &d);
+        self.alerts.send(alerts::Msg::Event(ev));
     }
 
     /// Query SNMP now. Returns whether the printer is in a blocking error (None = unknown).
@@ -332,20 +308,10 @@ impl Backend {
                     .set_printer_reasons(&self.log, &st.reasons(&self.thr));
                 self.reporter.attrs(&self.log, st.marker_attrs());
                 let conditions = st.conditions(&self.thr);
-                let job_id = self.job.job_id.clone();
-                let reasons = self.reporter.current().to_vec();
-                for (ev, d) in self.tracker.observe(
-                    &self.alerter,
-                    &conditions,
-                    &self.uri.authority(),
-                    "backend",
-                    |e| {
-                        e.job_id = Some(job_id.clone());
-                        e.reasons = reasons.clone();
-                    },
-                ) {
-                    self.log_delivery(&ev, &d);
-                }
+                self.alerts.send(alerts::Msg::Conditions {
+                    conditions,
+                    reasons: self.reporter.current().to_vec(),
+                });
                 let blocking = st.is_blocking(&self.thr);
                 self.last_blocking = Some(blocking);
                 self.last_status = Some(st);
@@ -760,7 +726,7 @@ impl Backend {
                     return Err(self.hold(EventKind::Unreachable, "unreachable", &msg));
                 }
             };
-            let _ = self.alerter.clear("unreachable");
+            self.alerts.send(alerts::Msg::Clear("unreachable".into()));
             self.log
                 .info(&format!("Connected to {}", self.uri.authority()));
             let res = self.send(&mut stream, input.as_mut(), &mut pending);

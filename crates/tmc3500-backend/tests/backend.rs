@@ -634,3 +634,28 @@ fn copy_failure_holds_without_resending_completed_copies() {
     assert_eq!(fake.connection_count(), 2);
     assert!(r.stderr.contains("copy 2 of 3"), "{}", r.stderr);
 }
+
+#[test]
+fn slow_alert_hooks_do_not_delay_the_job() {
+    let job = capture("000_default_t1.prn");
+    let h = H::new(&job);
+    let slow = h.dir.path().join("alert.d/20-slow");
+    std::fs::write(&slow, "#!/bin/sh\ncat >/dev/null\nsleep 1.5\n").unwrap();
+    std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    h.fake
+        .set_ink(tmc3500_core::status::printer::InkColor::Cyan, 5);
+    let t = Instant::now();
+    let child = h.spawn_file(&h.uri());
+    wait_for("job delivered", Duration::from_secs(10), || {
+        h.fake.jobs().len() == 1
+    });
+    assert!(
+        t.elapsed() < Duration::from_millis(1200),
+        "job waited for the hook: {:?}",
+        t.elapsed()
+    );
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    // the alert was still delivered before exit
+    assert_eq!(h.alert_names(), vec!["ink-low"]);
+}
