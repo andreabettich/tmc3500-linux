@@ -269,7 +269,7 @@ fn release_held_jobs_dry_run_and_real() {
     assert!(h.file("lp.args").is_none());
     assert_eq!(h.file("lpstat.args").unwrap().trim(), "-l -o TM-C3500");
 
-    let j = json(&h.run(&["release-held-jobs", "--json"]));
+    let j = json(&h.run(&["release-held-jobs", "--json", "--yes"]));
     assert_eq!(j["held"], serde_json::json!(["TM-C3500-12", "TM-C3500-15"]));
     assert_eq!(
         j["released"],
@@ -282,11 +282,58 @@ fn release_held_jobs_dry_run_and_real() {
 }
 
 #[test]
+fn releasing_everything_needs_yes_and_warns_first() {
+    let h = H::new();
+    lp_tools(&h);
+    let o = h.run(&["release-held-jobs"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(h.file("lp.args").is_none(), "released without --yes");
+    let all = format!("{}{}", out(&o), String::from_utf8_lossy(&o.stderr));
+    assert!(all.contains("--yes") && all.contains("--job"), "{all}");
+    assert!(all.contains("may reprint"), "{all}");
+    let o = h.run(&["release-held-jobs", "--yes"]);
+    assert_eq!(o.status.code(), Some(0));
+    let s = out(&o);
+    let warn = s.find("may reprint").expect("warning");
+    let first = s.find("Released").expect("released");
+    assert!(warn < first, "{s}");
+}
+
+#[test]
+fn release_a_single_job_and_clear_its_marker() {
+    let h = H::new();
+    lp_tools(&h);
+    let state = h.dir.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::write(
+        h.cfg(),
+        format!("[alerts]\nstate_dir = \"{}\"\n", state.display()),
+    )
+    .unwrap();
+    std::fs::write(state.join("partial-job-15"), "job 15 partially sent").unwrap();
+    std::fs::write(state.join("partial-job-12"), "job 12 partially sent").unwrap();
+    let o = h.run(&["release-held-jobs", "--job", "15"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(h.file("lp.args").unwrap(), "-i TM-C3500-15 -H resume\n");
+    assert!(!state.join("partial-job-15").exists());
+    assert!(state.join("partial-job-12").exists());
+    // a job that is not held is refused
+    let o = h.run(&["release-held-jobs", "--job", "TM-C3500-13"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(h.file("lp.args").unwrap(), "-i TM-C3500-15 -H resume\n");
+}
+
+#[test]
 fn release_reports_lp_failures() {
     let h = H::new();
     lp_tools(&h);
     h.tool("lp", "echo 'lp: Forbidden' >&2; exit 1");
-    let o = h.run(&["release-held-jobs", "--json"]);
+    let o = h.run(&["release-held-jobs", "--json", "--yes"]);
     assert_eq!(o.status.code(), Some(1));
     let j = json(&o);
     assert_eq!(j["failed"][0]["id"], "TM-C3500-12");

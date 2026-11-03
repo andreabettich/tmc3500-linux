@@ -677,3 +677,25 @@ fn busy_printer_reporting_printing_is_not_a_stall() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(h.fake.accepted_jobs().len(), 1);
 }
+
+#[test]
+fn hold_after_everything_was_delivered_says_so() {
+    // small job: fully acknowledged into the printer's buffer, then the printer goes silent
+    let mut h = H::new(&capture("000_default_t1.prn"));
+    h.extra_backend = "stall_timeout_ms = 800".into();
+    h.fake.set_snmp_mode(SnmpMode::Silent);
+    h.fake.set_paused(true);
+    let r = h.run_file();
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("bytes were delivered to the printer"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr
+            .contains("do not release it unless output is missing"),
+        "{}",
+        r.stderr
+    );
+}

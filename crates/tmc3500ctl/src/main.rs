@@ -92,6 +92,12 @@ enum Cmd {
         /// Only list the held jobs.
         #[arg(long)]
         dry_run: bool,
+        /// Release only this job (`TM-C3500-12` or `12`; repeatable).
+        #[arg(long = "job", value_name = "ID")]
+        jobs: Vec<String>,
+        /// Release every held job on the queue.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -158,7 +164,12 @@ fn run(cli: Cli) -> i32 {
             ppd,
             apply,
         } => setup(&mut ctx, &printer, queue, &ppd, apply),
-        Cmd::ReleaseHeldJobs { queue, dry_run } => release(&ctx, queue, dry_run),
+        Cmd::ReleaseHeldJobs {
+            queue,
+            dry_run,
+            jobs,
+            yes,
+        } => release(&ctx, queue, dry_run, &jobs, yes),
     }
 }
 
@@ -498,7 +509,9 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
     0
 }
 
-fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool) -> i32 {
+const REPRINT_WARNING: &str = "Warning: a released job prints again from the start, so it may reprint labels that were already printed. Check the printer output first.";
+
+fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes: bool) -> i32 {
     let queue = queue.unwrap_or_else(|| ctx.cfg.printer.queue.clone());
     if !valid_queue(&queue) {
         return ctx.fail(EXIT_ERROR, "invalid queue name", json!({}));
@@ -508,15 +521,67 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool) -> i32 {
         Err(e) => return ctx.fail(EXIT_ERROR, &e, json!({ "queue": queue })),
     };
     let held = lpstat::held_jobs(&out, &queue);
+    let mut targets = Vec::new();
+    for j in jobs {
+        let id = if !j.is_empty() && j.bytes().all(|c| c.is_ascii_digit()) {
+            format!("{queue}-{j}")
+        } else {
+            j.clone()
+        };
+        if !held.contains(&id) {
+            return ctx.fail(
+                EXIT_ERROR,
+                &format!(
+                    "{j} is not a held job on {queue} (held: {})",
+                    held.join(", ")
+                ),
+                json!({ "queue": queue, "held": held }),
+            );
+        }
+        if !targets.contains(&id) {
+            targets.push(id);
+        }
+    }
+    if jobs.is_empty() {
+        targets = held.clone();
+    }
+    if !dry_run && jobs.is_empty() && !yes && !held.is_empty() {
+        return ctx.fail(
+            EXIT_ERROR,
+            &format!(
+                "held jobs on {queue}: {}. {REPRINT_WARNING} Release one with --job <id>, or all with --yes.",
+                held.join(", ")
+            ),
+            json!({ "queue": queue, "held": held, "warning": REPRINT_WARNING }),
+        );
+    }
+    if !ctx.json && !dry_run && !targets.is_empty() {
+        // shown before anything is released
+        println!("{REPRINT_WARNING}");
+    }
     let mut released = Vec::new();
     let mut failed = Vec::new();
+    let mut warnings = Vec::new();
     if !dry_run {
-        for id in &held {
+        for id in &targets {
             match run_tool(
                 "lp",
                 &["-i".into(), id.clone(), "-H".into(), "resume".into()],
             ) {
-                Ok(_) => released.push(id.clone()),
+                Ok(_) => {
+                    if !ctx.json {
+                        println!("Released {id}");
+                    }
+                    let num = id.rsplit('-').next().unwrap_or(id);
+                    if let Err(e) =
+                        tmc3500_common::markers::remove_marker(&ctx.cfg.alerts.state_dir, num)
+                    {
+                        warnings.push(format!(
+                            "cannot remove the partial-send marker of {id}: {e}; the backend will hold it again"
+                        ));
+                    }
+                    released.push(id.clone());
+                }
                 Err(e) => failed.push(json!({ "id": id, "error": e })),
             }
         }
@@ -529,26 +594,22 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool) -> i32 {
         "held": held,
         "released": released,
         "failed": failed,
+        "warning": REPRINT_WARNING,
+        "warnings": warnings,
     });
-    ctx.print(&v, || {
-        let mut o = String::new();
-        if held.is_empty() {
-            o.push_str(&format!("No held jobs on {queue}\n"));
-        } else if dry_run {
-            o.push_str(&format!(
-                "Held jobs on {queue} (dry run, nothing released): {}\n",
-                held.join(", ")
-            ));
-        } else {
-            o.push_str(
-                "Note: released jobs print again from the start; check the printer output first.\n",
-            );
-            for id in &released {
-                o.push_str(&format!("Released {id}\n"));
-            }
-        }
-        o
-    });
+    if ctx.json {
+        println!("{v}");
+    } else if held.is_empty() {
+        println!("No held jobs on {queue}");
+    } else if dry_run {
+        println!(
+            "Held jobs on {queue} (dry run, nothing released): {}",
+            held.join(", ")
+        );
+    }
+    for w in &warnings {
+        eprintln!("tmc3500ctl: {w}");
+    }
     if !ok {
         for f in &failed {
             eprintln!(

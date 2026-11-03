@@ -95,13 +95,16 @@ enum SendError {
         sent: u64,
     },
     /// Connection reset/closed by the printer.
+    /// `delivered`: every byte had been acknowledged by the printer (failure after sending).
     Lost {
         sent: u64,
         err: String,
+        delivered: bool,
     },
     /// No progress for `stall_timeout` while the printer reported no error (or status unknown).
     Stalled {
         sent: u64,
+        delivered: bool,
     },
     Input {
         sent: u64,
@@ -444,6 +447,7 @@ impl Backend {
         let lost = |sent: u64, e: &dyn std::fmt::Display| SendError::Lost {
             sent,
             err: e.to_string(),
+            delivered: false,
         };
         stream
             .set_write_timeout(Some(t))
@@ -503,7 +507,10 @@ impl Backend {
                             stall_since = Instant::now();
                         } else if stall_since.elapsed() >= stall_timeout {
                             pending.drain(..off);
-                            return Err(SendError::Stalled { sent: total });
+                            return Err(SendError::Stalled {
+                                sent: total,
+                                delivered: false,
+                            });
                         }
                     }
                     Err(e) if e.kind() == ErrorKind::Interrupted => {}
@@ -567,7 +574,10 @@ impl Backend {
                         );
                         break Ok(total);
                     } else if quiet.elapsed() >= stall_timeout {
-                        break Err(SendError::Stalled { sent: total });
+                        break Err(SendError::Stalled {
+                            sent: total,
+                            delivered: queue == Some(0),
+                        });
                     }
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
@@ -575,6 +585,7 @@ impl Backend {
                     break Err(SendError::Lost {
                         sent: total,
                         err: e.to_string(),
+                        delivered: last_queue == Some(0),
                     })
                 }
             }
@@ -762,7 +773,7 @@ impl Backend {
                     );
                     return Err(CUPS_BACKEND_FAILED);
                 }
-                Err(SendError::Lost { sent: 0, err }) => {
+                Err(SendError::Lost { sent: 0, err, .. }) => {
                     // Nothing was written: the printer cannot have printed anything. Reconnect.
                     self.log.warning(&format!(
                         "Connection closed by the printer before any data was sent ({err}); reconnecting"
@@ -782,27 +793,49 @@ impl Backend {
                         return Err(self.hold(EventKind::Unreachable, "unreachable", &msg));
                     }
                 }
-                Err(SendError::Lost { sent, err }) => {
+                Err(SendError::Lost {
+                    sent,
+                    err,
+                    delivered,
+                }) => {
                     self.mark_partial(sent, &format!("connection lost: {err}"));
-                    let msg = format!(
-                        "Connection to the printer lost after sending {sent} bytes ({err}); the printer may have printed part of the job. {} held and NOT reprinted automatically: check the printer output, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
-                        self.job_label()
-                    );
+                    let msg = if delivered {
+                        self.delivered_message(sent, &format!("connection reset: {err}"))
+                    } else {
+                        format!(
+                            "Connection to the printer lost after sending {sent} bytes ({err}); the printer may have printed part of the job. {} held and NOT reprinted automatically: check the printer output, then release it with `tmc3500ctl release-held-jobs --job {}` or cancel it.",
+                            self.job_label(),
+                            self.job.job_id
+                        )
+                    };
                     return Err(self.hold(EventKind::JobHeld, "", &msg));
                 }
-                Err(SendError::Stalled { sent }) => {
+                Err(SendError::Stalled { sent, delivered }) => {
                     let _ = stream.shutdown(Shutdown::Both);
                     if sent + self.prior > 0 {
                         self.mark_partial(sent, "printer stalled");
                     }
-                    let msg = format!(
-                        "Printer stopped accepting data after {sent} bytes without reporting an error. {} held and NOT reprinted automatically: check the printer, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
-                        self.job_label()
-                    );
+                    let msg = if delivered {
+                        self.delivered_message(sent, "no reply and no status")
+                    } else {
+                        format!(
+                            "Printer stopped accepting data after {sent} bytes without reporting an error. {} held and NOT reprinted automatically: check the printer, then release it with `tmc3500ctl release-held-jobs --job {}` or cancel it.",
+                            self.job_label(),
+                            self.job.job_id
+                        )
+                    };
                     return Err(self.hold(EventKind::JobHeld, "", &msg));
                 }
             }
         }
+    }
+
+    /// Hold message when every byte had reached the printer before the failure.
+    fn delivered_message(&self, sent: u64, why: &str) -> String {
+        format!(
+            "All {sent} bytes were delivered to the printer before it stopped responding ({why}); the job has probably printed completely, so do not release it unless output is missing. {} held.",
+            self.job_label()
+        )
     }
 
     /// Record that `sent` bytes of this job reached the printer (see [`markers`]).
