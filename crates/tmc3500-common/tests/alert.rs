@@ -142,7 +142,7 @@ fn repeats_are_suppressed_until_cleared() {
         Some(d.path().join("state/alerts.json")),
     );
     assert!(b.emit(&ev(EventKind::InkLow, "ink-low:cyan")).suppressed);
-    b.clear("ink-low:cyan");
+    b.clear("192.0.2.5", "ink-low:cyan");
     assert!(!a.emit(&ev(EventKind::InkLow, "ink-low:cyan")).suppressed);
     assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 3);
 }
@@ -235,7 +235,7 @@ fn repeats_are_suppressed_in_process_even_without_a_writable_state_file() {
         a.emit(&ev(EventKind::MediaOut, "media-out"));
     }
     assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 1);
-    a.clear("media-out");
+    a.clear("192.0.2.5", "media-out");
     a.emit(&ev(EventKind::MediaOut, "media-out"));
     assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 2);
 }
@@ -261,7 +261,7 @@ fn symlinked_hooks_and_writable_alert_dir_are_refused() {
         0o755,
     );
     fs::set_permissions(d.path().join("alert.d"), fs::Permissions::from_mode(0o775)).unwrap();
-    a.clear("media-out");
+    a.clear("192.0.2.5", "media-out");
     let r = a.emit(&ev(EventKind::MediaOut, "media-out"));
     assert!(r.hooks.is_empty(), "{r:?}");
     assert!(r.warnings.iter().any(|w| w.contains("writable")), "{r:?}");
@@ -363,4 +363,37 @@ fn hook_timeout_kills_the_whole_process_group() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn repeats_are_suppressed_per_printer() {
+    let (d, a) = setup();
+    let count = d.path().join("count");
+    hook(
+        &d.path().join("alert.d"),
+        "h",
+        &format!("echo x >> {}", count.display()),
+        0o755,
+    );
+    let on = |printer: &str| Event::new(EventKind::MediaOut, "media-out", printer, "m", "test");
+    assert!(!a.emit(&on("192.0.2.1")).suppressed);
+    // the same condition on another printer is a separate incident
+    assert!(!a.emit(&on("192.0.2.2")).suppressed);
+    assert!(a.emit(&on("192.0.2.1")).suppressed);
+    assert!(a.emit(&on("192.0.2.2")).suppressed);
+    // clearing one printer's condition leaves the other suppressed
+    a.clear("192.0.2.1", "media-out");
+    assert!(!a.emit(&on("192.0.2.1")).suppressed);
+    assert!(a.emit(&on("192.0.2.2")).suppressed);
+    assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 3);
+}
+
+#[test]
+fn event_carries_the_queue_when_known() {
+    let mut e = ev(EventKind::MediaOut, "media-out");
+    let v: serde_json::Value = serde_json::from_str(&e.to_json()).unwrap();
+    assert!(v.get("queue").is_none(), "{v}");
+    e.queue = Some("TM-C3500-2".into());
+    let v: serde_json::Value = serde_json::from_str(&e.to_json()).unwrap();
+    assert_eq!(v["queue"], "TM-C3500-2");
 }

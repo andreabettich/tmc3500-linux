@@ -840,3 +840,33 @@ fn soak_random_faults_never_lose_or_duplicate() {
     eprintln!("soak: {n} jobs, {ok} printed, {held} held");
     assert!(ok > 0 && held > 0);
 }
+
+#[test]
+fn alerts_name_the_queue_and_the_printer_like_the_monitor_does() {
+    let h = H::new(&big_job());
+    h.fake.set_drop_after(Some(50_000));
+    let child = h
+        .cmd(&h.uri())
+        .env("PRINTER", "TM-C3500-2")
+        .args([
+            "42",
+            "alice",
+            "label",
+            "1",
+            "",
+            h.job_file.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    let a = h.alerts();
+    let held = a
+        .iter()
+        .find(|e| e["event"] == "job-held")
+        .expect("job-held");
+    assert_eq!(held["queue"], "TM-C3500-2", "{held}");
+    // the plain host, as tmc3500-monitor reports it, so both share repeat suppression
+    assert_eq!(held["printer"], "127.0.0.1", "{held}");
+}
