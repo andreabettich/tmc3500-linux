@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tmc3500-core"]
+members = ["crates/tmc3500-core", "crates/rastertotmc3500"]
 
 [workspace.package]
 edition = "2021"

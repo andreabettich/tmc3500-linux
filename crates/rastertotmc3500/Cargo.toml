@@ -1,0 +1,12 @@
+[package]
+name = "rastertotmc3500"
+description = "CUPS filter: CUPS raster to Epson TM-C3500 job bytes"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tmc3500-core = { path = "../tmc3500-core" }
+
+[dev-dependencies]
+png = "0.17"
