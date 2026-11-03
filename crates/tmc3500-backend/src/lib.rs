@@ -66,7 +66,13 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Result<Option<JobArgs>, String
                 job_id: clean(&s(1), 32),
                 user: clean(&s(2), 64),
                 title: clean(&s(3), 128),
-                copies: s(4).trim().parse().unwrap_or(1),
+                // CUPS socket-backend convention: copies only apply to a file argument; jobs
+                // from a filter on stdin already contain their copies.
+                copies: if args.len() == 7 {
+                    s(4).trim().parse::<u32>().map_or(1, |c| c.clamp(1, 9999))
+                } else {
+                    1
+                },
                 options: s(5),
                 file: args.get(6).map(std::path::PathBuf::from),
             }))
@@ -123,6 +129,10 @@ struct Backend {
     tracker: ConditionTracker,
     thr: Thresholds,
     stdin: Option<Box<dyn Read>>,
+    /// (current copy, number of copies).
+    copies: (u32, u32),
+    /// Bytes of completed copies.
+    prior: u64,
 }
 
 /// Process environment the backend reads.
@@ -231,6 +241,8 @@ pub fn run_with(
         tracker: ConditionTracker::default(),
         thr,
         stdin: Some(stdin),
+        copies: (1, 1),
+        prior: 0,
     };
     b.run_job()
 }
@@ -642,27 +654,31 @@ impl Backend {
         CUPS_BACKEND_HOLD
     }
 
-    fn run_job(&mut self) -> i32 {
-        if self.job.copies != 1 {
-            self.log.debug(&format!(
-                "copies={} (copies are encoded in the job by the filter; sending once)",
-                self.job.copies
-            ));
+    /// "Job 42" or "Job 42 (copy 2 of 3)".
+    fn job_label(&self) -> String {
+        if self.copies.1 > 1 {
+            format!(
+                "Job {} (copy {} of {})",
+                self.job.job_id, self.copies.0, self.copies.1
+            )
+        } else {
+            format!("Job {}", self.job.job_id)
         }
-        let mut input: Box<dyn Read> = match &self.job.file {
-            Some(p) => match std::fs::File::open(p) {
-                Ok(f) => Box::new(f),
-                Err(e) => {
-                    self.log
-                        .error(&format!("cannot open job file {}: {e}", p.display()));
-                    return CUPS_BACKEND_FAILED;
-                }
-            },
-            None => match self.stdin.take() {
-                Some(s) => s,
-                None => Box::new(std::io::empty()),
-            },
-        };
+    }
+
+    fn open_input(&mut self) -> Result<Box<dyn Read>, String> {
+        match &self.job.file {
+            Some(p) => std::fs::File::open(p)
+                .map(|f| Box::new(f) as Box<dyn Read>)
+                .map_err(|e| format!("cannot open job file {}: {e}", p.display())),
+            None => Ok(self
+                .stdin
+                .take()
+                .unwrap_or_else(|| Box::new(std::io::empty()))),
+        }
+    }
+
+    fn run_job(&mut self) -> i32 {
         let state_dir = self.cfg.alerts.state_dir.clone();
         if let Some(m) = markers::read_marker(&state_dir, &self.job.job_id) {
             let msg = format!(
@@ -673,27 +689,75 @@ impl Backend {
             return self.hold(EventKind::JobHeld, "", &msg);
         }
         self.log.info(&format!(
-            "Printing job {} to {}",
+            "Printing job {} to {}{}",
             self.job.job_id,
-            self.uri.redacted()
+            self.uri.redacted(),
+            if self.job.copies > 1 {
+                format!(" ({} copies)", self.job.copies)
+            } else {
+                String::new()
+            }
         ));
+        let n = self.job.copies.max(1);
+        for copy in 1..=n {
+            self.copies = (copy, n);
+            let input = match self.open_input() {
+                Ok(i) => i,
+                Err(e) if self.prior == 0 => {
+                    self.log.error(&e);
+                    return CUPS_BACKEND_FAILED;
+                }
+                Err(e) => {
+                    self.mark_partial(0, &e);
+                    let msg = format!(
+                        "{}: {e}; earlier copies were printed. Held and NOT reprinted automatically.",
+                        self.job_label()
+                    );
+                    return self.hold(EventKind::JobHeld, "", &msg);
+                }
+            };
+            match self.deliver(input) {
+                Ok(total) => {
+                    self.prior += total;
+                    if n > 1 {
+                        self.log
+                            .info(&format!("{} sent ({total} bytes)", self.job_label()));
+                    }
+                }
+                Err(code) => return code,
+            }
+        }
+        self.log.info(&format!("Job sent ({} bytes)", self.prior));
+        if let Err(e) = markers::remove_marker(&state_dir, &self.job.job_id) {
+            self.log
+                .warning(&format!("cannot remove partial-send marker: {e}"));
+        }
+        self.final_status();
+        CUPS_BACKEND_OK
+    }
+
+    /// Deliver one copy. `Err` carries the exit code.
+    fn deliver(&mut self, mut input: Box<dyn Read>) -> Result<u64, i32> {
         let start = Instant::now();
         let mut pending: Vec<u8> = Vec::new();
         loop {
             if !self.wait_until_ready() {
-                return self.cancelled_exit(0);
+                return Err(self.cancelled_exit(0));
             }
             let mut stream = match self.connect(start) {
                 Ok(s) => s,
-                Err(ConnectError::Cancelled) => return self.cancelled_exit(0),
+                Err(ConnectError::Cancelled) => return Err(self.cancelled_exit(0)),
                 Err(ConnectError::Unreachable(e)) => {
                     let secs = self.cfg.backend.unreachable_hold_after().as_secs_f64();
+                    if self.prior > 0 {
+                        self.mark_partial(0, "printer unreachable between copies");
+                    }
                     let msg = format!(
-                        "Printer {} unreachable for {secs:.1} s ({e}); job {} held. Release it with `tmc3500ctl release-held-jobs` once the printer is back.",
+                        "Printer {} unreachable for {secs:.1} s ({e}); {} held. Release it with `tmc3500ctl release-held-jobs` once the printer is back.",
                         self.uri.authority(),
-                        self.job.job_id
+                        self.job_label()
                     );
-                    return self.hold(EventKind::Unreachable, "unreachable", &msg);
+                    return Err(self.hold(EventKind::Unreachable, "unreachable", &msg));
                 }
             };
             let _ = self.alerter.clear("unreachable");
@@ -701,28 +765,19 @@ impl Backend {
                 .info(&format!("Connected to {}", self.uri.authority()));
             let res = self.send(&mut stream, input.as_mut(), &mut pending);
             match res {
-                Ok(total) => {
-                    drop(stream);
-                    self.log.info(&format!("Job sent ({total} bytes)"));
-                    if let Err(e) = markers::remove_marker(&state_dir, &self.job.job_id) {
-                        self.log
-                            .warning(&format!("cannot remove partial-send marker: {e}"));
-                    }
-                    self.final_status();
-                    return CUPS_BACKEND_OK;
-                }
+                Ok(total) => return Ok(total),
                 Err(SendError::Cancelled { sent }) => {
                     let _ = stream.shutdown(Shutdown::Both);
-                    return self.cancelled_exit(sent);
+                    return Err(self.cancelled_exit(sent));
                 }
-                Err(SendError::Input { sent, err: e }) if sent > 0 => {
+                Err(SendError::Input { sent, err: e }) if sent + self.prior > 0 => {
                     let _ = stream.shutdown(Shutdown::Both);
                     self.mark_partial(sent, &format!("job data unreadable: {e}"));
                     let msg = format!(
-                        "Cannot read job data after sending {sent} bytes ({e}); the printer may have printed part of the job. Job {} held and NOT reprinted automatically.",
-                        self.job.job_id
+                        "Cannot read job data after sending {sent} bytes ({e}); the printer may have printed part of the job. {} held and NOT reprinted automatically.",
+                        self.job_label()
                     );
-                    return self.hold(EventKind::JobHeld, "", &msg);
+                    return Err(self.hold(EventKind::JobHeld, "", &msg));
                 }
                 Err(SendError::Input { err: e, .. }) => {
                     let _ = stream.shutdown(Shutdown::Both);
@@ -732,7 +787,7 @@ impl Backend {
                         &format!("job-failed:{}", self.job.job_id),
                         &format!("job {} failed: cannot read job data: {e}", self.job.job_id),
                     );
-                    return CUPS_BACKEND_FAILED;
+                    return Err(CUPS_BACKEND_FAILED);
                 }
                 Err(SendError::Lost { sent: 0, err }) => {
                     // Nothing was written: the printer cannot have printed anything. Reconnect.
@@ -740,35 +795,38 @@ impl Backend {
                         "Connection closed by the printer before any data was sent ({err}); reconnecting"
                     ));
                     if self.sleep(self.cfg.backend.retry_initial()) {
-                        return self.cancelled_exit(0);
+                        return Err(self.cancelled_exit(0));
                     }
                     if start.elapsed() >= self.cfg.backend.unreachable_hold_after() {
+                        if self.prior > 0 {
+                            self.mark_partial(0, "printer keeps closing the connection");
+                        }
                         let msg = format!(
-                            "Printer {} keeps closing the connection ({err}); job {} held",
+                            "Printer {} keeps closing the connection ({err}); {} held",
                             self.uri.authority(),
-                            self.job.job_id
+                            self.job_label()
                         );
-                        return self.hold(EventKind::Unreachable, "unreachable", &msg);
+                        return Err(self.hold(EventKind::Unreachable, "unreachable", &msg));
                     }
                 }
                 Err(SendError::Lost { sent, err }) => {
                     self.mark_partial(sent, &format!("connection lost: {err}"));
                     let msg = format!(
-                        "Connection to the printer lost after sending {sent} bytes ({err}); the printer may have printed part of the job. Job {} held and NOT reprinted automatically: check the printer output, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
-                        self.job.job_id
+                        "Connection to the printer lost after sending {sent} bytes ({err}); the printer may have printed part of the job. {} held and NOT reprinted automatically: check the printer output, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
+                        self.job_label()
                     );
-                    return self.hold(EventKind::JobHeld, "", &msg);
+                    return Err(self.hold(EventKind::JobHeld, "", &msg));
                 }
                 Err(SendError::Stalled { sent }) => {
                     let _ = stream.shutdown(Shutdown::Both);
-                    if sent > 0 {
+                    if sent + self.prior > 0 {
                         self.mark_partial(sent, "printer stalled");
                     }
                     let msg = format!(
-                        "Printer stopped accepting data after {sent} bytes without reporting an error. Job {} held and NOT reprinted automatically: check the printer, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
-                        self.job.job_id
+                        "Printer stopped accepting data after {sent} bytes without reporting an error. {} held and NOT reprinted automatically: check the printer, then release it with `tmc3500ctl release-held-jobs` or cancel it.",
+                        self.job_label()
                     );
-                    return self.hold(EventKind::JobHeld, "", &msg);
+                    return Err(self.hold(EventKind::JobHeld, "", &msg));
                 }
             }
         }
@@ -776,9 +834,19 @@ impl Backend {
 
     /// Record that `sent` bytes of this job reached the printer (see [`markers`]).
     fn mark_partial(&self, sent: u64, why: &str) {
+        let done = if self.copies.0 > 1 {
+            format!(
+                ", copies 1..{} of {} completed",
+                self.copies.0 - 1,
+                self.copies.1
+            )
+        } else {
+            String::new()
+        };
         let text = format!(
-            "job {} partially sent ({sent} bytes) at {}: {why}\n",
+            "job {} partially sent ({} bytes{done}) at {}: {why}\n",
             self.job.job_id,
+            sent + self.prior,
             tmc3500_common::time::rfc3339(tmc3500_common::time::unix_now())
         );
         if let Err(e) = markers::write_marker(&self.cfg.alerts.state_dir, &self.job.job_id, &text) {
@@ -790,10 +858,11 @@ impl Backend {
     }
 
     fn cancelled_exit(&mut self, sent: u64) -> i32 {
-        if sent > 0 {
+        if sent + self.prior > 0 {
             let msg = format!(
-                "Job {} stopped (SIGTERM) after {sent} bytes were sent: the printer may have printed part of it. If CUPS restarts this job it will be held, not reprinted.",
-                self.job.job_id
+                "{} stopped (SIGTERM) after {} bytes were sent: the printer may have printed part of it. If CUPS restarts this job it will be held, not reprinted.",
+                self.job_label(),
+                sent + self.prior
             );
             self.log.error(&msg);
             self.mark_partial(sent, "stopped by SIGTERM");
@@ -899,6 +968,16 @@ mod tests {
         );
         assert_eq!(code, CUPS_BACKEND_HOLD);
         assert!(d.path().join("state/partial-job-42").exists());
+    }
+
+    #[test]
+    fn copies_only_with_a_file_argument() {
+        let c = |v: &[&str]| parse_args(&os(v)).unwrap().unwrap().copies;
+        assert_eq!(c(&["u", "1", "u", "t", "3", ""]), 1);
+        assert_eq!(c(&["u", "1", "u", "t", "3", "", "/f"]), 3);
+        assert_eq!(c(&["u", "1", "u", "t", "0", "", "/f"]), 1);
+        assert_eq!(c(&["u", "1", "u", "t", "x", "", "/f"]), 1);
+        assert_eq!(c(&["u", "1", "u", "t", "100000", "", "/f"]), 9999);
     }
 
     #[test]

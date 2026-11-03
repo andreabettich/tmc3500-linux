@@ -92,6 +92,8 @@ struct State {
     waste_remaining: i64,
     paper_out_after: Option<u64>,
     drop_after: Option<u64>,
+    /// (connection number starting at 1, bytes): drop only that connection.
+    drop_nth: Option<(u64, u64)>,
     slow_read: Option<(usize, Duration)>,
     refuse: bool,
     /// Stop reading the job socket without reporting any error (SNMP shows "printing").
@@ -118,6 +120,7 @@ impl Default for State {
             waste_remaining: 80,
             paper_out_after: None,
             drop_after: None,
+            drop_nth: None,
             slow_read: None,
             refuse: false,
             paused: false,
@@ -272,6 +275,10 @@ impl FakePrinter {
     /// Close job connections after reading this many bytes (until cleared).
     pub fn set_drop_after(&self, n: Option<u64>) {
         self.with(|s| s.drop_after = n)
+    }
+    /// Drop only the `n`-th job connection (1-based) after `bytes` bytes.
+    pub fn set_drop_nth(&self, v: Option<(u64, u64)>) {
+        self.with(|s| s.drop_nth = v)
     }
     /// Read at most `chunk` bytes, then sleep `delay`.
     pub fn set_slow_read(&self, v: Option<(usize, Duration)>) {
@@ -450,7 +457,10 @@ fn handle_job(sh: &Shared, mut stream: TcpStream, n_accepted: &mut usize) {
                 continue;
             }
             s.stalled = false;
-            if let Some(n) = s.drop_after {
+            let nth = s
+                .drop_nth
+                .and_then(|(c, b)| (c == s.connections).then_some(b));
+            if let Some(n) = s.drop_after.or(nth) {
                 if data.len() as u64 >= n {
                     drop(s);
                     // Closing with unread data makes the kernel send RST, like a printer reset.
@@ -466,7 +476,7 @@ fn handle_job(sh: &Shared, mut stream: TcpStream, n_accepted: &mut usize) {
                 delay = Some(d);
             }
             let have = data.len() as u64;
-            for limit in [s.drop_after, s.paper_out_after].into_iter().flatten() {
+            for limit in [s.drop_after, nth, s.paper_out_after].into_iter().flatten() {
                 if limit > have {
                     chunk = chunk.min((limit - have).min(usize::MAX as u64) as usize);
                 }

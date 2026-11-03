@@ -570,3 +570,67 @@ fn sigterm_after_partial_send_marks_the_job_and_a_restart_is_held() {
     assert_eq!(h.fake.connection_count(), before);
     assert!(h.alert_names().contains(&"job-held".to_string()));
 }
+
+#[test]
+fn copies_are_sent_for_file_jobs_only() {
+    let job = capture("000_default_t1.prn");
+    let h = H::new(&job);
+    let r = finish(
+        h.cmd(&h.uri())
+            .args([
+                "42",
+                "alice",
+                "label",
+                "3",
+                "",
+                h.job_file.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap(),
+        Duration::from_secs(20),
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        h.fake.accepted_jobs(),
+        vec![job.clone(), job.clone(), job.clone()]
+    );
+    // from stdin (filter output) copies are already in the job: send once
+    let mut child = h
+        .cmd(&h.uri())
+        .args(["43", "alice", "label", "3", ""])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&job).unwrap();
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(h.fake.accepted_jobs().len(), 4);
+}
+
+#[test]
+fn copy_failure_holds_without_resending_completed_copies() {
+    let job = big_job();
+    let h = H::new(&job);
+    // the second connection is dropped part-way
+    let fake = &h.fake;
+    fake.set_drop_nth(Some((2, 50_000)));
+    let child = h
+        .cmd(&h.uri())
+        .args([
+            "42",
+            "alice",
+            "label",
+            "3",
+            "",
+            h.job_file.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert_eq!(fake.accepted_jobs().len(), 1);
+    assert_eq!(fake.connection_count(), 2);
+    assert!(r.stderr.contains("copy 2 of 3"), "{}", r.stderr);
+}
