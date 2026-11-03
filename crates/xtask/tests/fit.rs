@@ -1,11 +1,12 @@
 //! Round trip: a chart printed by our own pipeline must fit back to the converter that printed it.
 use std::path::PathBuf;
 use tmc3500_core::color::Converter;
+use tmc3500_core::color::{provisional_split, Lut};
 use tmc3500_core::cupsraster::Reader;
 use tmc3500_core::options::JobConfig;
 use tmc3500_core::pipeline::render_page;
 use tmc3500_core::protocol::job::{encode_job, JobMeta};
-use xtask::{fit, Layout};
+use xtask::{derive_mode, fit, read_chart_png, Image, Layout};
 
 fn layout() -> Layout {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -13,14 +14,37 @@ fn layout() -> Layout {
     serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
 }
 
-/// The chart as a CUPS raster page (v3 LE) at the job's device resolution.
-fn chart_raster(l: &Layout, w: u32, h: u32, hscale: u32) -> Vec<u8> {
+fn testdata(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/colour")
+        .join(name)
+}
+
+/// The chart image (1476 px wide so the last patch column fits, 360 dpi). `shear` moves each row `shear` pixels further right
+/// (wrapping), like the session-2 chart as Windows decoded it.
+fn chart_image(l: &Layout, shear: u32) -> Image {
+    let (w, h) = (1476u32, 828u32);
     let mut rgb = vec![255u8; (w * h * 3) as usize];
     for p in &l.patches {
         for y in p.y..p.y + l.patch {
-            for x in p.x * hscale..(p.x + l.patch) * hscale {
-                let d = ((y * w + x) * 3) as usize;
+            for x in p.x..p.x + l.patch {
+                let sx = (x + y * shear) % w;
+                let d = ((y * w + sx) * 3) as usize;
                 rgb[d..d + 3].copy_from_slice(&p.rgb);
+            }
+        }
+    }
+    Image::new(w, h, rgb).unwrap()
+}
+
+/// The image as a CUPS raster page (v3 LE) at the job's device resolution.
+fn chart_raster(img: &Image, w: u32, h: u32, hscale: u32) -> Vec<u8> {
+    let mut rgb = vec![255u8; (w * h * 3) as usize];
+    for y in 0..img.height() {
+        for x in 0..img.width().min(w / hscale) {
+            for s in 0..hscale {
+                let d = ((y * w + x * hscale + s) * 3) as usize;
+                rgb[d..d + 3].copy_from_slice(&img.pixel(x, y));
             }
         }
     }
@@ -43,11 +67,36 @@ fn chart_raster(l: &Layout, w: u32, h: u32, hscale: u32) -> Vec<u8> {
     out
 }
 
-fn round_trip(opts: &str, w: u32, hscale: u32) {
-    let l = layout();
+fn round_trip(opts: &str, w: u32, hscale: u32, shear: u32) {
+    round_trip_without(opts, w, hscale, shear, |_| false);
+}
+
+/// `drop(i)`: cube patch i is not printed (left white), like the 145 session-2 colours that never
+/// reached the page, so its node has to be inferred from the others.
+fn round_trip_without(opts: &str, w: u32, hscale: u32, shear: u32, drop: impl Fn(usize) -> bool) {
+    let mut l = layout();
+    let full = l.clone();
+    for (i, p) in l.patches.iter_mut().enumerate() {
+        if p.kind == "cube" && drop(i) {
+            p.kind = "dropped".into();
+        }
+    }
+    let mut img = chart_image(&l, shear);
+    let dropped: Vec<[u8; 3]> = l
+        .patches
+        .iter()
+        .filter(|p| p.kind == "dropped")
+        .map(|p| p.rgb)
+        .collect();
+    for p in &l.patches {
+        if p.kind == "dropped" {
+            img.fill(p.x, p.y, l.patch, l.patch, [255, 255, 255]);
+        }
+    }
+    let l = full;
     let cfg = JobConfig::from_cups(opts, 1).unwrap();
     let conv = Converter::new(&cfg.color, cfg.black);
-    let ras = chart_raster(&l, w, 2477, hscale);
+    let ras = chart_raster(&img, w, 2477, hscale);
     let mut rd = Reader::new(&ras[..]).unwrap();
     let h = rd.next_page().unwrap().unwrap();
     let page = render_page(&mut rd, &h, &cfg, &conv).unwrap();
@@ -62,15 +111,37 @@ fn round_trip(opts: &str, w: u32, hscale: u32) {
         host_id: [0; 6],
     };
     let job = encode_job(&cfg, &meta, &[page]);
-    let (lut, report) = fit(&job, &l).unwrap();
-    let mut worst = 0i64;
+    let (lut, report) = fit(&job, &img, &l).unwrap();
+    let (mut worst, mut worst_inferred, mut amount_inferred) = (0i64, 0i64, 0i64);
     for p in l.patches.iter().filter(|p| p.kind == "cube") {
         let (want, got) = (conv.drops(p.rgb), lut.lookup(p.rgb));
+        let inferred = dropped.contains(&p.rgb);
+        let w = if inferred {
+            &mut worst_inferred
+        } else {
+            &mut worst
+        };
         for (a, b) in want.iter().flatten().zip(got.iter().flatten()) {
-            worst = worst.max((i64::from(*a) - i64::from(*b)).abs());
+            *w = (*w).max((i64::from(*a) - i64::from(*b)).abs());
+        }
+        if inferred {
+            for (a, b) in conv.amounts(p.rgb).iter().zip(lut.amounts(p.rgb)) {
+                amount_inferred = amount_inferred.max((i64::from(*a) - i64::from(b)).abs());
+            }
         }
     }
+    // measured nodes: only the split curve's smoothing of the provisional kinks
     assert!(worst < 3300, "{opts}: worst node error {worst} / 65535");
+    // inferred nodes: the ink amount is smooth and follows its neighbours; the split of the
+    // provisional model has sharp kinks a neighbour cannot predict
+    assert!(
+        amount_inferred < 3300,
+        "{opts}: worst inferred amount error {amount_inferred} / 65535"
+    );
+    assert!(
+        worst_inferred < 8000,
+        "{opts}: worst inferred node error {worst_inferred} / 65535"
+    );
     // Between nodes the provisional model has sharp kinks (small→medium drops at 1/3 and 2/3 ink) that a
     // 9-level grid cannot follow; this only checks the ramp patches are measured at the right place.
     assert!(
@@ -82,12 +153,52 @@ fn round_trip(opts: &str, w: u32, hscale: u32) {
 
 #[test]
 fn speed_chart_fits_back_to_the_converter() {
-    round_trip("", 1475, 1);
+    round_trip("", 1475, 1, 0);
 }
 
 #[test]
 fn quality_chart_fits_back_to_the_converter() {
-    round_trip("TmQuality=Quality2", 2950, 2);
+    round_trip("TmQuality=Quality2", 2950, 2, 0);
+}
+
+#[test]
+fn colours_missing_from_the_page_are_inferred() {
+    // every 5th node (never the first or last patch) replaced by a mix of its neighbours
+    round_trip_without("", 1475, 1, 0, |i| i % 5 == 2 && i > 0 && i < 728);
+}
+
+#[test]
+fn sheared_chart_fits_by_colour_not_position() {
+    round_trip("", 1475, 1, 12);
+}
+
+#[test]
+fn chart_png_is_read_as_windows_decoded_it() {
+    let png = std::fs::read(testdata("c1_colour_chart_session2.png")).unwrap();
+    let img = read_chart_png(&png).unwrap();
+    assert_eq!((img.width(), img.height()), (1440, 828));
+    // Each row that crosses patch column 40 is 36 bytes too long in the file; the decoder takes fixed
+    // 4321-byte rows, so row 18 (first patch row) starts with patch 0 and row 19 is shifted by 12 px.
+    assert_eq!(img.pixel(18, 18), [0, 0, 0]);
+    assert_eq!(img.pixel(18 + 12, 19), [0, 0, 0]);
+    assert_eq!(img.pixel(18 + 11, 19), [255, 255, 255]);
+}
+
+#[test]
+fn windows_capture_fits_with_white_paper_and_ink_on_black() {
+    let png = std::fs::read(testdata("c1_colour_chart_session2.png")).unwrap();
+    let img = read_chart_png(&png).unwrap();
+    let job = std::fs::read(testdata("701_chart_matte_speed.prn")).unwrap();
+    let (lut, report) = fit(&job, &img, &layout()).unwrap();
+    assert_eq!(lut.lookup([255, 255, 255]), [[0; 3]; 4]);
+    // rich black: about 0.37 large K drops (measured 0.371..0.382 with different insets)
+    let k_large = f64::from(lut.lookup([0, 0, 0])[0][2]) / 65535.0;
+    assert!((0.33..0.42).contains(&k_large), "K large {k_large}");
+    assert!(
+        report.max_ramp_error < 0.15,
+        "ramp error {}",
+        report.max_ramp_error
+    );
 }
 
 #[test]
@@ -104,5 +215,96 @@ fn a_job_without_the_chart_is_rejected() {
         host_id: [0; 6],
     };
     let job = encode_job(&cfg, &meta, &[]);
-    assert!(fit(&job, &layout()).is_err());
+    assert!(fit(&job, &chart_image(&layout(), 0), &layout()).is_err());
+}
+
+fn flat(n: usize, a: [u16; 4]) -> Lut {
+    Lut::new(
+        n,
+        vec![a; n * n * n],
+        std::array::from_fn(|_| provisional_split()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn colour_mode_is_carried_over_scaled_by_the_ink_level() {
+    // reference: the mode adds 6000 cyan and removes 3000 black; the base prints half the ink
+    let (pref, mode) = (
+        flat(17, [20000, 20000, 0, 0]),
+        flat(17, [17000, 26000, 0, 6000]),
+    );
+    let base = flat(17, [10000, 10000, 0, 0]);
+    let d = derive_mode(&base, &pref, &mode).unwrap();
+    assert_eq!(d.amounts([10, 200, 30]), [8500, 13000, 0, 3000]);
+    // never below zero, and the base's split curves are kept
+    // (same total ink as the reference, so the full −3000 black applies)
+    let d = derive_mode(&flat(17, [1000, 39000, 0, 0]), &pref, &mode).unwrap();
+    assert_eq!(d.amounts([0, 0, 0])[0], 0);
+    assert_eq!(d.split_curve(1), base.split_curve(1));
+    // identical reference tables: the base comes back unchanged
+    assert_eq!(derive_mode(&base, &pref, &pref).unwrap(), base);
+}
+
+/// End to end against Windows: the chart printed by our pipeline with the shipped Matte Speed table
+/// puts down the same ink as the Windows driver did (capture 701), colour by colour.
+#[test]
+fn shipped_table_prints_the_chart_like_windows() {
+    let png = std::fs::read(testdata("c1_colour_chart_session2.png")).unwrap();
+    let img = read_chart_png(&png).unwrap();
+    let lut_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packaging/colour/matte-speed-preferred.lut");
+    let lut = Lut::parse(&std::fs::read(lut_path).unwrap()).unwrap();
+    let cfg = JobConfig::from_cups("PageSize=Custom.4.25x6.88in", 1).unwrap();
+    let conv = Converter::with_lut(&cfg.color, cfg.black, lut);
+    let ras = chart_raster(&img, 1475, 2477, 1);
+    let mut rd = Reader::new(&ras[..]).unwrap();
+    let h = rd.next_page().unwrap().unwrap();
+    let page = render_page(&mut rd, &h, &cfg, &conv).unwrap();
+    let meta = JobMeta {
+        year: 2026,
+        month: 1,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        job_id: 1,
+        host_id: [0; 6],
+    };
+    let ours = xtask::samples(&encode_job(&cfg, &meta, &[page]), &img).unwrap();
+    let windows = xtask::samples(
+        &std::fs::read(testdata("701_chart_matte_speed.prn")).unwrap(),
+        &img,
+    )
+    .unwrap();
+    let mut diffs: Vec<f64> = windows
+        .iter()
+        .filter_map(|w| {
+            let o = ours.iter().find(|o| o.rgb == w.rgb)?;
+            let (a, b) = (w.amounts(), o.amounts());
+            Some((0..4).map(|i| (a[i] - b[i]).abs()).fold(0.0, f64::max))
+        })
+        .collect();
+    assert!(diffs.len() > 700, "{} colours compared", diffs.len());
+    diffs.sort_by(f64::total_cmp);
+    let (median, p90) = (diffs[diffs.len() / 2], diffs[diffs.len() * 9 / 10]);
+    // measured 2026-11-03: median 0.003, p90 0.007 (provisional colours: 0.254, 0.520)
+    assert!(
+        median < 0.01 && p90 < 0.02,
+        "median {median:.3} p90 {p90:.3}"
+    );
+}
+
+#[test]
+fn derived_mode_respects_the_coating_ink_limit() {
+    // the reference mode raises the ink limit by 10 % (60000 → 66000 total); the base coating's
+    // limit is 40000, so derived nodes may total at most 44000. Here the change would take the
+    // base's magenta below zero; clamping it adds ink (49000 without the limit).
+    let n = 17;
+    let pref = flat(n, [15000, 15000, 15000, 15000]);
+    let mode = flat(n, [0, 33000, 0, 33000]);
+    let base = flat(n, [20000, 5000, 5000, 10000]);
+    let d = derive_mode(&base, &pref, &mode).unwrap();
+    let total: u32 = d.amounts([0, 255, 0]).iter().map(|&v| u32::from(v)).sum();
+    assert!((43990..=44000).contains(&total), "total {total}");
 }

@@ -210,15 +210,27 @@ impl Plan {
     }
 }
 
+/// How far the pass grid moves down when the page is moved down by `row_offset` (borderless off):
+/// all of it in Speed, 10 rows less in Quality1 (one phase step), not at all in Quality2
+/// (captures 110/111, 743, 744).
+fn grid_offset(mode: WeaveMode, row_offset: u32) -> i64 {
+    i64::from(match mode {
+        WeaveMode::Speed { .. } => row_offset,
+        WeaveMode::Quality1 => row_offset.saturating_sub(10),
+        WeaveMode::Quality2 => 0,
+    })
+}
+
 /// Build the band commands for a page. `row_offset` moves the page down (21 with borderless off).
 pub fn weave(page: &InkPage, mode: WeaveMode, row_offset: u32) -> Vec<u8> {
     let mut w = Writer::new();
     let Some((_, last)) = page.inked_rows() else {
         return w.into_bytes();
     };
-    // The pass grid moves with the page: plan in page rows, add the offset when positioning.
-    let offset = i64::from(row_offset);
-    let plan = Plan::new(mode, i64::from(last));
+    // Plan in grid rows: grid row = page row + shift; a pass at grid row y prints at y + offset.
+    let offset = grid_offset(mode, row_offset);
+    let shift = i64::from(row_offset) - offset;
+    let plan = Plan::new(mode, i64::from(last) + shift);
     let quality = !matches!(mode, WeaveMode::Speed { .. });
     let (step, phases) = if quality { (2u32, 2u32) } else { (1, 1) };
     let mut cur_y = 0i64;
@@ -232,14 +244,15 @@ pub fn weave(page: &InkPage, mode: WeaveMode, row_offset: u32) -> Vec<u8> {
                 let mut levels = vec![0u8; lines * ndots];
                 let (mut lo, mut hi) = (usize::MAX, 0usize);
                 for l in 0..lines {
-                    let r = pass.y + 2 * l as i64 - NOZZLE_LEAD + nr as i64;
+                    let rg = pass.y + 2 * l as i64 - NOZZLE_LEAD + nr as i64;
+                    let r = rg - shift;
                     if r < 0 || r >= i64::from(page.height()) || !page.row_has_ink(r as u32) {
                         continue;
                     }
                     for k in 0..ndots {
                         let x = k as u32 * step + ph;
                         let v = page.get(ink, x, r as u32);
-                        if v != 0 && plan.prints(pi, r, x) {
+                        if v != 0 && plan.prints(pi, rg, x) {
                             levels[l * ndots + k] = v;
                             lo = lo.min(k);
                             hi = hi.max(k);
@@ -426,8 +439,11 @@ mod tests {
             (WeaveMode::Speed { banding: true }, false, 0),
             (WeaveMode::Speed { banding: true }, false, 21),
             (WeaveMode::Speed { banding: false }, false, 0),
+            (WeaveMode::Speed { banding: false }, false, 21),
             (WeaveMode::Quality1, true, 0),
+            (WeaveMode::Quality1, true, 21),
             (WeaveMode::Quality2, true, 0),
+            (WeaveMode::Quality2, true, 21),
         ] {
             let page = sample_page(203, 1100);
             let (back, _) = reassemble(

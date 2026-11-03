@@ -35,7 +35,7 @@
 "306_save_lowerupper_contlabel" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmMediaSaving=LowerUpper" }
 "307_save_lower_contpaper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper TmMediaSaving=Lower" }
 "308_save_lowerupper_contpaper" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousPaper TmMediaSaving=LowerUpper" }
-"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain", raster = "skip" } # Plain colour table moves colour edges (phase 3)
+"310_coating_plain" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Plain", raster = "skip" } # block edges follow where sparse dots fall, which depends on colour and dither
 "311_coating_synthetic" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Synthetic" }
 "312_coating_wristband" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Wristband" }
 "313_coating_glossy" = { options = "PageSize=Custom.4.25x6.88in TmCoating=Glossy" }
@@ -89,3 +89,23 @@
 "611_vacuum_manual_4" = { options = "TmVacuum=4" }
 "612_vacuum_manual_0" = { options = "TmVacuum=0" }
 "900_default_t1_logged" = {}
+# session 2 (2026-11-03)
+"730_vacuum_1" = { options = "TmVacuum=1" }
+"731_vacuum_2" = { options = "TmVacuum=2" }
+"732_vacuum_3" = { options = "TmVacuum=3" }
+"733_vacuum_5" = { options = "TmVacuum=5" }
+"734_vacuum_6" = { options = "TmVacuum=6" }
+"735_vacuum_7" = { options = "TmVacuum=7" }
+"736_vacuum_8" = { options = "TmVacuum=8" }
+"740_label_width_4.10" = { options = "PageSize=Custom.4.10x6.88in" }
+"741_label_width_4.15" = { options = "PageSize=Custom.4.15x6.88in" }
+"742_paper_width_2.00" = { options = "PageSize=Custom.2.00x6.88in TmMediaForm=ContinuousPaper" }
+"743_borderless_off_q1" = { options = "PageSize=Custom.4.25x6.88in TmQuality=Quality1 TmBorderless=False" }
+"744_borderless_off_q2" = { options = "PageSize=Custom.4.25x6.88in TmQuality=Quality2 TmBorderless=False" }
+"745_skip_blank_pages3" = { options = "TmSkipBlank=True" }
+"746_save_lowerupper_t3" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmMediaSaving=LowerUpper" }
+"747_save_lower_t3" = { options = "PageSize=Custom.4.25x6.88in TmMediaForm=ContinuousLabel TmMediaSaving=Lower" }
+"748_rotate180_posadj_v+0.50" = { options = "TmRotate180=True TmPosAdjV=0.50in" }
+"790_default_t1" = {}
+"791_default_t3" = {}
+"792_default_t4_pages3" = {}

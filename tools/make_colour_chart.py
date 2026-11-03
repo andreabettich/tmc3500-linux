@@ -9,7 +9,10 @@ Layout: patches of PATCH px on a PITCH grid starting at (MARGIN, MARGIN), row-ma
 import json, os, struct, sys, zlib
 
 PATCH, PITCH, MARGIN, COLS = 30, 36, 18, 40
-W = 1440  # 4.00 in at 360 dpi, inside the 1475-dot printable width; height follows the patch count
+# 1470 px: the last patch column ends at 1452, plus the right margin; inside the 1475-dot printable
+# width. (The session-2 chart used 1440, so its rows were too long: see testdata/colour/README.)
+W = 2 * MARGIN + (COLS - 1) * PITCH + PATCH
+assert W <= 1475
 
 def patches(brand):
     out = []
@@ -30,6 +33,7 @@ def patches(brand):
 def png(path, w, h, rows):
     def chunk(t, d):
         return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    assert len(rows) == h and all(len(r) == w * 3 for r in rows), "row length"
     raw = b"".join(b"\x00" + r for r in rows)
     ppm = round(360 / 0.0254)
     data = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
@@ -52,6 +56,7 @@ def main():
     H = 2 * MARGIN + rows_needed * PITCH
     assert H <= 2400, "too many patches for one 108 x 174.8 mm label"
     img = [bytearray(b"\xff" * (W * 3)) for _ in range(H)]
+    assert MARGIN + (COLS - 1) * PITCH + PATCH <= W
     layout = {"dpi": 360, "patch": PATCH, "pitch": PITCH, "margin": MARGIN, "cols": COLS, "width": W, "height": H, "patches": []}
     for i, (kind, rgb) in enumerate(ps):
         x0, y0 = MARGIN + (i % COLS) * PITCH, MARGIN + (i // COLS) * PITCH

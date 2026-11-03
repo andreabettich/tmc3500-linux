@@ -151,7 +151,7 @@ The `SN` payload is 26 bytes (REMOTE1 length field `1a 00`):
 | 8 | coating: 1 Plain, 3 Matte, 4 Synthetic, 5 Wristband, 6 Glossy (2 is used by continuous paper) |
 | 9 | `00` |
 | 10–17 | `ff…` |
-| 18 | vacuum (0x5A = 90, 0x41 = 65, 0x1E = 30; `ff` = automatic) |
+| 18 | vacuum: suction of slider position 0…9 = 30, 40, 50, 60, 65, 70, 75, 80, 85, 90; `ff` = automatic |
 | 19–23 | `ff…` |
 | 24–25 | checksum: the 16-bit little-endian sum of bytes 2–23 |
 
@@ -160,8 +160,9 @@ use control `257 − n`, then the byte. Everything else goes out as literals of 
 `n − 1`. This reproduces all 283,202 lines in the captures exactly.
 
 Geometry: sizes are first rounded to 0.1 mm (half up), then converted to 1/360 in (half up). The minimum
-length is 8.0 mm (0.31 in in the UI). Label forms add 2 × 28 dots of edge to the width. `ESC(l` is 56 when
-the width exceeds 1531 dots, otherwise 28 (an assumption; only those two cases were captured). The
+length is 8.0 mm (0.31 in in the UI). Label forms add 2 × 28 dots of edge to the width. `ESC(l` is the edge
+(28 for label forms, 0 for continuous paper) plus half the media width beyond the 1475-dot printable
+width, rounded down (session 2: 4.15 in → 28 + 9, continuous paper 2.00 in → 0). The
 die-cut gap is 43 dots for the predefined 108 × 174.8 mm media and 42 for custom sizes.
 
 ### 3.2 Setting → command map
@@ -174,7 +175,7 @@ Verified from the captures. All lengths are in 1/360 in unless stated otherwise.
 | Media saving | `ESC(C` / `ESC(S` / `ESC(c` length shrinks to the printed area |
 | After print | Auto cut: `BC n` (every n pages), `BC` dropped for "last page". No cut: `EX 27 02 01` + `EX 25 0x` (02 peel-off, 01 cut position, 00 print end). |
 | Notification | `BB 00 01 00 00 00` job end, `BB 00 00 00 01 00` page end |
-| Borderless off | `ESC(c` bottom −21, `ESC(m 21` |
+| Borderless off | `ESC(c` bottom −21, `ESC(m 21`; the pass grid moves down 21 rows in Speed, 11 in Quality1, 0 in Quality2 (743/744) |
 | Bidirectional | `ESC U` |
 | Banding reduction | `ESC(m` bit 0 |
 | Vacuum | SN byte 18 |
@@ -185,7 +186,7 @@ Verified from the captures. All lengths are in 1/360 in unless stated otherwise.
 Still to be confirmed:
 - **The 6-byte `JH` id:** probably a host or driver instance id. Generate a fixed id per installation;
   check on the real printer.
-- **504 skip-blank:** resolved in phase 1. A skipped blank page still gets its page-setup commands (`ESC(G` … `ESC(e`); only its raster and form feed are left out (504 is 1 byte shorter than 004). Multi-page behaviour is extrapolated from this single-page capture; check it on the real printer.
+- **504 skip-blank:** resolved in phase 1. A skipped blank page still gets its page-setup commands (`ESC(G` … `ESC(e`); only its raster and form feed are left out (504 is 1 byte shorter than 004). Session 2 confirmed it for 3 blank pages (745).
 - **Nozzle row split and pass layout:** to be confirmed against every capture in phase 2.
 
 ## 4. Colour and barcode quality

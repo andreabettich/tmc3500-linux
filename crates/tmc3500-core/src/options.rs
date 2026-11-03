@@ -132,13 +132,13 @@ pub enum Vacuum {
 }
 
 impl Vacuum {
-    /// Byte 18 of the `SN` media block. Only captured slider positions are constructed.
+    /// Byte 18 of the `SN` media block: the suction value of slider position 0..=9 (Windows
+    /// captures of every position), 0xff for automatic.
     pub fn sn_byte(self) -> u8 {
+        const SUCTION: [u8; 10] = [30, 40, 50, 60, 65, 70, 75, 80, 85, 90];
         match self {
             Self::Auto => 0xff,
-            Self::Manual(0) => 30,
-            Self::Manual(4) => 65,
-            Self::Manual(_) => 90,
+            Self::Manual(n) => SUCTION[usize::from(n.min(9))],
         }
     }
 }
@@ -430,14 +430,7 @@ impl JobConfig {
                     c.vacuum = if v == "Auto" {
                         Vacuum::Auto
                     } else {
-                        match parse_int(k, v, 0, 9)? {
-                            n @ (0 | 4 | 9) => Vacuum::Manual(n as u8),
-                            n => {
-                                return Err(OptError::NotYetSupported(format!(
-                                    "TmVacuum={n} (capture pending)"
-                                )))
-                            }
-                        }
+                        Vacuum::Manual(parse_int(k, v, 0, 9)? as u8)
                     }
                 }
                 "TmPosAdjH" => c.pos_adj_h = parse_pos(k, v, 1039, "-4.09in..=4.09in")?,
@@ -639,15 +632,17 @@ mod tests {
     }
 
     #[test]
-    fn vacuum_only_accepts_captured_values() {
-        assert_eq!(cfg("TmVacuum=9").vacuum.sn_byte(), 0x5a);
-        assert_eq!(cfg("TmVacuum=4").vacuum.sn_byte(), 0x41);
-        assert_eq!(cfg("TmVacuum=0").vacuum.sn_byte(), 0x1e);
+    fn vacuum_slider_positions_map_to_the_windows_suction_values() {
+        // captures 610-612 (session 1) and 730-736 (session 2): the logged Suction value
+        let want = [30, 40, 50, 60, 65, 70, 75, 80, 85, 90];
+        for (pos, w) in want.iter().enumerate() {
+            assert_eq!(
+                cfg(&format!("TmVacuum={pos}")).vacuum.sn_byte(),
+                *w,
+                "{pos}"
+            );
+        }
         assert_eq!(cfg("TmVacuum=Auto").vacuum.sn_byte(), 0xff);
-        assert!(matches!(
-            JobConfig::from_cups("TmVacuum=5", 1),
-            Err(OptError::NotYetSupported(_))
-        ));
         assert!(matches!(
             JobConfig::from_cups("TmVacuum=10", 1),
             Err(OptError::OutOfRange { .. })

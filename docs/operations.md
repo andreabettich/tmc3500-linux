@@ -51,7 +51,7 @@ lp -d TM-C3500 -n 3 -o Collate=True -o TmAfterPrint=CutLastPage labels.pdf
 | `TmNotify` | `None`, `PageEnd`, `JobEnd` (buzzer) |
 | `TmBorderless`, `TmBandingReduction`, `TmBidirectional` | `True` / `False` |
 | `TmRotate180`, `TmSkipBlank`, `TmInkAdjust` | `False` / `True` |
-| `TmVacuum` | `Auto`, `9`, `4`, `0` (other slider positions not yet captured) |
+| `TmVacuum` | `Auto`, `0` (weak) … `9` (strong): the Windows slider positions |
 | `TmPosAdjH`, `TmPosAdjV` | any length, e.g. `0.5mm`, `-0.02in` (±4.09 in / ±44 in) |
 | `TmBlack` | `Rich` (as Windows), `KOnly` |
 | `TmColorMode` | `Preferred`, `Standard`, `Off`; `TmGamma` `2.2` / `1.8` |
@@ -117,12 +117,19 @@ Test the chain: `sudo -u tmc3500 /etc/tmc3500/alert.d/50-syslog < /dev/null` sho
 
 ## 6. Colour tables
 
-Brand colours depend on fitted colour tables in `/usr/share/tmc3500/colour/`, one per coating, quality and
-colour mode. Until they are installed the driver prints with provisional colours. For barcodes and black
-text use `-o TmBlack=KOnly`: it always prints pure black ink, with or without tables. Tables are produced
-from Windows colour-chart captures with
-`cargo run -p xtask -- fit-colour <capture.prn> <layout.json> <name>.lut` (the chart and its
-`layout.json` come from `tools/make_colour_chart.py` in the source tree).
+Colours come from tables in `/usr/share/tmc3500/colour/`, one per coating, quality and colour mode,
+fitted from the Windows driver's own output (see the `README` there). Printed through the filter, the
+colour chart puts down the same ink as Windows within 0.3 % per colour (median). The Preferred tables
+of every coating/quality and Matte Speed's Standard, gamma 1.8 and Off are measured; the other
+Standard/gamma 1.8/Off tables are derived from them. A missing or unreadable table makes the filter
+fall back to provisional colours with an `INFO`/`WARNING` line in the job log.
+
+For barcodes and black text, `-o TmBlack=KOnly` prints black and greys (R = G = B) with black ink
+only; other colours on the same label still come from the table (which, like Windows, builds black
+from all four inks).
+
+Tables are rebuilt from Windows chart captures with `tools/build_colour_tables.sh <captures-dir>`
+in the source tree.
 
 ## 7. Hardening checklist
 
@@ -158,7 +165,9 @@ from Windows colour-chart captures with
   `journalctl -k | grep tmc3500`; if clean, `sudo aa-enforce /etc/apparmor.d/tmc3500`.
 - **Updates:** an `apt` upgrade restarts `tmc3500-monitor` (if running) but not CUPS; a job in progress
   keeps running with the old backend, and the partial-job markers protect jobs interrupted by a CUPS
-  restart.
+  restart. CUPS keeps its own copy of the PPD per queue: re-run `sudo tmc3500ctl setup --printer
+  <ip> --apply` after an upgrade so new options (e.g. all vacuum positions) appear in print dialogs;
+  the queue's default options are kept.
 
 ## 8. Troubleshooting
 
@@ -166,6 +175,6 @@ from Windows colour-chart captures with
 |---|---|
 | job stays "processing" | `lpstat -l -p TM-C3500`; `tmc3500ctl status`; is the printer in error? |
 | job held | alert text; `/var/lib/tmc3500/partial-job-*`; check output before releasing |
-| "no colour table … provisional" in the job log | expected until colour tables are installed |
+| "no colour table … provisional" in the job log | the table for that coating/quality/mode is missing from `/usr/share/tmc3500/colour/` |
 | filter `ERROR:` | options in the message; `lp -o ...` values must match the PPD names above |
 | debugging | `sudo cupsctl --debug-logging`; `/var/log/cups/error_log` |
