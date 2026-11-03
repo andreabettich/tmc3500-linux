@@ -130,6 +130,8 @@ struct Backend {
     last_status: Option<PrinterStatus>,
     reporter: StateReporter,
     alerts: alerts::AlertWorker,
+    /// CUPS queue name (for alerts).
+    queue: Option<String>,
     thr: Thresholds,
     stdin: Option<Box<dyn Read>>,
     /// (current copy, number of copies).
@@ -145,6 +147,8 @@ pub struct Env {
     pub device_uri: Option<String>,
     /// `$TMC3500_CONFIG` or the default config path.
     pub config_path: std::path::PathBuf,
+    /// `PRINTER`: the CUPS queue name, put into alerts.
+    pub queue: Option<String>,
 }
 
 impl Env {
@@ -152,6 +156,9 @@ impl Env {
         Env {
             device_uri: std::env::var("DEVICE_URI").ok(),
             config_path: Config::path_from_env(),
+            queue: std::env::var("PRINTER")
+                .ok()
+                .filter(|q| tmc3500_common::config::valid_queue(q)),
         }
     }
 }
@@ -227,8 +234,13 @@ pub fn run_with(
         None
     };
     let alerter = Alerter::from_config(&cfg.alerts, ALERT_STATE_FILE);
-    let alerts =
-        alerts::AlertWorker::start(alerter, log.clone(), uri.authority(), job.job_id.clone());
+    let alerts = alerts::AlertWorker::start(
+        alerter,
+        log.clone(),
+        uri.host.clone(),
+        env.queue.clone(),
+        job.job_id.clone(),
+    );
     let thr = cfg.thresholds();
     let mut b = Backend {
         cfg,
@@ -243,6 +255,7 @@ pub fn run_with(
         last_status: None,
         reporter: StateReporter::default(),
         alerts,
+        queue: env.queue.clone(),
         thr,
         stdin: Some(stdin),
         copies: (1, 1),
@@ -273,13 +286,15 @@ impl Backend {
         }
     }
 
+    /// The printer as alerts name it: the plain host, as `tmc3500-monitor` does.
     fn printer_name(&self) -> String {
-        self.uri.authority()
+        self.uri.host.clone()
     }
 
     fn alert(&self, kind: EventKind, key: &str, message: &str) {
         let mut ev = Event::new(kind, key, &self.printer_name(), message, "backend");
         ev.job_id = Some(self.job.job_id.clone());
+        ev.queue = self.queue.clone();
         ev.reasons = self.reporter.current().to_vec();
         self.alerts.send(alerts::Msg::Event(ev));
     }
@@ -988,6 +1003,7 @@ mod tests {
                 fake.snmp_port()
             )),
             config_path: cfg,
+            queue: None,
         };
         let input = FailingReader {
             data: vec![0u8; 1 << 20],

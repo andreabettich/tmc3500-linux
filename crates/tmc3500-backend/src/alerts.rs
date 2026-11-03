@@ -51,7 +51,13 @@ pub fn log_delivery(log: &Log, ev: &Event, d: &Delivery) {
 }
 
 impl AlertWorker {
-    pub fn start(alerter: Alerter, log: Log, printer: String, job_id: String) -> AlertWorker {
+    pub fn start(
+        alerter: Alerter,
+        log: Log,
+        printer: String,
+        queue: Option<String>,
+        job_id: String,
+    ) -> AlertWorker {
         let (tx, rx) = sync_channel::<Msg>(QUEUE);
         let wlog = log.clone();
         let handle = std::thread::Builder::new()
@@ -71,6 +77,7 @@ impl AlertWorker {
                             for (ev, d) in
                                 tracker.observe(&alerter, &conditions, &printer, "backend", |e| {
                                     e.job_id = Some(job_id.clone());
+                                    e.queue = queue.clone();
                                     e.reasons = reasons.clone();
                                 })
                             {
@@ -78,7 +85,7 @@ impl AlertWorker {
                             }
                         }
                         Msg::Clear(k) => {
-                            for w in alerter.clear(&k) {
+                            for w in alerter.clear(&printer, &k) {
                                 wlog.warning(&format!("alert: {w}"));
                             }
                         }

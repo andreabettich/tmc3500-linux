@@ -33,6 +33,9 @@ pub struct Event {
     pub severity: String,
     /// Printer address.
     pub printer: String,
+    /// CUPS queue of the printer, if known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub queue: Option<String>,
     pub message: String,
     /// RFC 3339 UTC.
     pub time: String,
@@ -55,6 +58,7 @@ impl Event {
             key: key.to_string(),
             severity: kind.severity().name().to_string(),
             printer: printer.to_string(),
+            queue: None,
             message: message.to_string(),
             time: rfc3339(now),
             timestamp: now,
@@ -208,8 +212,10 @@ impl Alerter {
         }
     }
 
-    /// Forget `key`, so its next occurrence is sent immediately (call when a condition clears).
-    pub fn clear(&self, key: &str) -> Vec<String> {
+    /// Forget `key` of `printer`, so its next occurrence is sent immediately (call when a
+    /// condition clears).
+    pub fn clear(&self, printer: &str, key: &str) -> Vec<String> {
+        let key = &suppression_key(printer, key);
         self.mem().remove(key);
         let mut w = Vec::new();
         let _lock = self.lock_state(&mut w);
@@ -230,21 +236,22 @@ impl Alerter {
             && d.warnings.is_empty()
             && self.save_ok.load(Ordering::SeqCst);
         let now = unix_now();
+        let key = suppression_key(&ev.printer, &ev.key);
         if !self.repeat_interval.is_zero() {
-            let file_recent = st.sent.get(&ev.key).is_some_and(|&last| {
+            let file_recent = st.sent.get(&key).is_some_and(|&last| {
                 now.saturating_sub(last) < self.repeat_interval.as_secs().max(1)
             });
             let mem_recent = self
                 .mem()
-                .get(&ev.key)
+                .get(&key)
                 .is_some_and(|t| t.elapsed() < self.repeat_interval);
             if file_recent || (!file_usable && mem_recent) {
                 d.suppressed = true;
                 return d;
             }
         }
-        self.mem().insert(ev.key.clone(), Instant::now());
-        st.sent.insert(ev.key.clone(), now);
+        self.mem().insert(key.clone(), Instant::now());
+        st.sent.insert(key, now);
         if st.sent.len() > MAX_KEYS {
             // drop the oldest entries
             let mut v: Vec<_> = st.sent.iter().map(|(k, t)| (*t, k.clone())).collect();
@@ -324,6 +331,11 @@ impl Alerter {
         }
         v
     }
+}
+
+/// Repeat suppression is per printer: the same condition on two printers is two incidents.
+fn suppression_key(printer: &str, key: &str) -> String {
+    format!("{printer}|{key}")
 }
 
 /// Hooks and the hook directory must be owned by root or by the user running the program.
@@ -434,7 +446,7 @@ impl ConditionTracker {
         }
         for k in &self.previous {
             if !conditions.iter().any(|c| &c.key == k) {
-                alerter.clear(k);
+                alerter.clear(printer, k);
             }
         }
         self.previous = conditions.iter().map(|c| c.key.clone()).collect();

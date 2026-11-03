@@ -840,3 +840,62 @@ fn soak_random_faults_never_lose_or_duplicate() {
     eprintln!("soak: {n} jobs, {ok} printed, {held} held");
     assert!(ok > 0 && held > 0);
 }
+
+#[test]
+fn alerts_name_the_queue_and_the_printer_like_the_monitor_does() {
+    let h = H::new(&big_job());
+    h.fake.set_drop_after(Some(50_000));
+    let child = h
+        .cmd(&h.uri())
+        .env("PRINTER", "TM-C3500-2")
+        .args([
+            "42",
+            "alice",
+            "label",
+            "1",
+            "",
+            h.job_file.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    let a = h.alerts();
+    let held = a
+        .iter()
+        .find(|e| e["event"] == "job-held")
+        .expect("job-held");
+    assert_eq!(held["queue"], "TM-C3500-2", "{held}");
+    // the plain host, as tmc3500-monitor reports it, so both share repeat suppression
+    assert_eq!(held["printer"], "127.0.0.1", "{held}");
+}
+
+#[test]
+fn a_bad_printer_list_does_not_stop_printing() {
+    let h = H::new(&capture("000_default_t1.prn"));
+    // the backend uses the device URI, not [[printers]]; a mistake there must not stop the queue
+    // (a separate file: H::cmd rewrites the default one)
+    let cfg = h.dir.path().join("bad-list.toml");
+    let mut text = std::fs::read_to_string(h.config()).unwrap();
+    text.push_str(
+        "\n[[printers]]\nqueue = \"A\"\nhost = \"h1\"\n[[printers]]\nqueue = \"A\"\nhost = \"bad host\"\n",
+    );
+    std::fs::write(&cfg, text).unwrap();
+    let child = h
+        .cmd(&h.uri())
+        .args([
+            "42",
+            "alice",
+            "label",
+            "1",
+            "",
+            h.job_file.to_str().unwrap(),
+        ])
+        .env("TMC3500_CONFIG", &cfg)
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    let r = finish(child, Duration::from_secs(20));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}

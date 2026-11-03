@@ -19,6 +19,7 @@ enum Prev {
 
 pub struct Monitor {
     printer: String,
+    queue: Option<String>,
     alerter: Alerter,
     thr: Thresholds,
     tracker: ConditionTracker,
@@ -30,9 +31,15 @@ pub struct Monitor {
 }
 
 impl Monitor {
-    pub fn new(printer: String, alerter: Alerter, thr: Thresholds) -> Monitor {
+    pub fn new(
+        printer: String,
+        queue: Option<String>,
+        alerter: Alerter,
+        thr: Thresholds,
+    ) -> Monitor {
         Monitor {
             printer,
+            queue,
             alerter,
             thr,
             tracker: ConditionTracker::default(),
@@ -58,8 +65,9 @@ impl Monitor {
 
     /// Emit `kind` without repeat suppression (transitions are always reported).
     fn transition(&mut self, kind: EventKind, key: &str, msg: &str, reasons: &[String]) -> Event {
-        self.warnings.extend(self.alerter.clear(key));
+        self.warnings.extend(self.alerter.clear(&self.printer, key));
         let mut ev = Event::new(kind, key, &self.printer, msg, "monitor");
+        ev.queue = self.queue.clone();
         ev.reasons = reasons.to_vec();
         let d = self.alerter.emit(&ev);
         self.note(&d, &ev);
@@ -85,7 +93,8 @@ impl Monitor {
                         "Printer reachable again",
                         &rv,
                     ));
-                    self.warnings.extend(self.alerter.clear("unreachable"));
+                    self.warnings
+                        .extend(self.alerter.clear(&self.printer, "unreachable"));
                 }
                 if let Some(last) = &self.last_reasons {
                     if *last != reasons {
@@ -107,10 +116,12 @@ impl Monitor {
                 }
                 let conditions = st.conditions(&self.thr);
                 let printer = self.printer.clone();
+                let queue = self.queue.clone();
                 let sent =
                     self.tracker
                         .observe(&self.alerter, &conditions, &printer, "monitor", |e| {
-                            e.reasons = rv.clone()
+                            e.queue = queue.clone();
+                            e.reasons = rv.clone();
                         });
                 for (ev, d) in sent {
                     self.note(&d, &ev);
@@ -127,6 +138,7 @@ impl Monitor {
                     &format!("Printer status unavailable: {e}"),
                     "monitor",
                 );
+                ev.queue = self.queue.clone();
                 ev.reasons = self
                     .last_reasons
                     .as_ref()
@@ -158,9 +170,19 @@ fn esc(s: &str) -> String {
     o
 }
 
-/// Prometheus text exposition for one poll.
-pub fn render_metrics(printer: &str, snap: &Snapshot, thr: &Thresholds, now: u64) -> String {
-    let p = format!("printer=\"{}\"", esc(printer));
+/// One sample: labels and value.
+type Row = (String, String);
+
+/// One printer's poll, for [`render_metrics`].
+pub struct Poll<'a> {
+    pub printer: &'a str,
+    pub queue: &'a str,
+    pub snap: &'a Snapshot,
+}
+
+/// Prometheus text exposition for the latest poll of every printer. Each metric is declared once,
+/// with the samples of all printers under it (labels `printer` and `queue`).
+pub fn render_metrics(polls: &[Poll<'_>], thr: &Thresholds, now: u64) -> String {
     let mut t = String::new();
     let mut metric = |name: &str, help: &str, kind: &str, rows: &[(String, String)]| {
         let _ = writeln!(t, "# HELP {name} {help}");
@@ -169,86 +191,125 @@ pub fn render_metrics(printer: &str, snap: &Snapshot, thr: &Thresholds, now: u64
             let _ = writeln!(t, "{name}{{{labels}}} {value}");
         }
     };
-    let up = snap.is_ok();
+    let labels =
+        |p: &Poll<'_>| format!("printer=\"{}\",queue=\"{}\"", esc(p.printer), esc(p.queue));
+    let up: Vec<(&Poll<'_>, &PrinterStatus)> = polls
+        .iter()
+        .filter_map(|p| p.snap.as_ref().ok().map(|st| (p, st)))
+        .collect();
+    let rows = |f: &dyn Fn(&Poll<'_>, &PrinterStatus) -> Vec<Row>| -> Vec<Row> {
+        up.iter().flat_map(|(p, st)| f(p, st)).collect()
+    };
     metric(
         "tmc3500_up",
         "Whether the printer answered the last SNMP poll.",
         "gauge",
-        &[(p.clone(), u8::from(up).to_string())],
+        &polls
+            .iter()
+            .map(|p| (labels(p), u8::from(p.snap.is_ok()).to_string()))
+            .collect::<Vec<_>>(),
     );
     metric(
         "tmc3500_last_poll_timestamp_seconds",
         "Unix time of the last poll.",
         "gauge",
-        &[(p.clone(), now.to_string())],
+        &polls
+            .iter()
+            .map(|p| (labels(p), now.to_string()))
+            .collect::<Vec<_>>(),
     );
-    let Ok(st) = snap else { return t };
-    if let Some(d) = st.device {
+    let device = rows(&|p, st| {
+        st.device
+            .map(|d| (labels(p), d.value().to_string()))
+            .into_iter()
+            .collect()
+    });
+    if !device.is_empty() {
         metric(
             "tmc3500_device_status",
             "hrDeviceStatus (1 unknown, 2 running, 3 warning, 4 testing, 5 down).",
             "gauge",
-            &[(p.clone(), d.value().to_string())],
+            &device,
         );
     }
-    if let Some(s) = st.printer {
+    let printer = rows(&|p, st| {
+        st.printer
+            .map(|s| (labels(p), s.value().to_string()))
+            .into_iter()
+            .collect()
+    });
+    if !printer.is_empty() {
         metric(
             "tmc3500_printer_status",
             "hrPrinterStatus (1 other, 2 unknown, 3 idle, 4 printing, 5 warmup).",
             "gauge",
-            &[(p.clone(), s.value().to_string())],
+            &printer,
         );
     }
-    let reasons = st.reasons(thr);
-    metric(
-        "tmc3500_blocking",
-        "1 if the printer reports an error that stops printing.",
-        "gauge",
-        &[(p.clone(), u8::from(st.is_blocking(thr)).to_string())],
-    );
-    let rows: Vec<_> = reasons
-        .iter()
-        .map(|r| (format!("{p},reason=\"{}\"", esc(r)), "1".to_string()))
-        .collect();
-    metric(
-        "tmc3500_state_reason",
-        "Current CUPS printer-state-reasons keywords.",
-        "gauge",
-        &rows,
-    );
-    let rows: Vec<_> = st
-        .supplies
-        .iter()
-        .filter_map(|s| {
-            let marker = match s.kind {
-                SupplyKind::Ink(c) => c.name(),
-                SupplyKind::MaintenanceBox => "maintenance-box",
-                SupplyKind::Other => "other",
-            };
-            s.percent_remaining().map(|v| {
-                (
-                    format!(
-                        "{p},index=\"{}\",marker=\"{marker}\",description=\"{}\"",
-                        s.index,
-                        esc(&s.description)
-                    ),
-                    v.to_string(),
-                )
-            })
-        })
-        .collect();
-    metric(
-        "tmc3500_marker_level_percent",
-        "Supply remaining in percent (maintenance box: free space).",
-        "gauge",
-        &rows,
-    );
-    if let Some(c) = st.life_count {
+    if !up.is_empty() {
+        metric(
+            "tmc3500_blocking",
+            "1 if the printer reports an error that stops printing.",
+            "gauge",
+            &rows(&|p, st| vec![(labels(p), u8::from(st.is_blocking(thr)).to_string())]),
+        );
+        metric(
+            "tmc3500_state_reason",
+            "Current CUPS printer-state-reasons keywords.",
+            "gauge",
+            &rows(&|p, st| {
+                st.reasons(thr)
+                    .iter()
+                    .map(|r| {
+                        (
+                            format!("{},reason=\"{}\"", labels(p), esc(r)),
+                            "1".to_string(),
+                        )
+                    })
+                    .collect()
+            }),
+        );
+        metric(
+            "tmc3500_marker_level_percent",
+            "Supply remaining in percent (maintenance box: free space).",
+            "gauge",
+            &rows(&|p, st| {
+                st.supplies
+                    .iter()
+                    .filter_map(|s| {
+                        let marker = match s.kind {
+                            SupplyKind::Ink(c) => c.name(),
+                            SupplyKind::MaintenanceBox => "maintenance-box",
+                            SupplyKind::Other => "other",
+                        };
+                        s.percent_remaining().map(|v| {
+                            (
+                                format!(
+                                    "{},index=\"{}\",marker=\"{marker}\",description=\"{}\"",
+                                    labels(p),
+                                    s.index,
+                                    esc(&s.description)
+                                ),
+                                v.to_string(),
+                            )
+                        })
+                    })
+                    .collect()
+            }),
+        );
+    }
+    let life = rows(&|p, st| {
+        st.life_count
+            .map(|c| (labels(p), c.to_string()))
+            .into_iter()
+            .collect()
+    });
+    if !life.is_empty() {
         metric(
             "tmc3500_marker_life_count",
             "prtMarkerLifeCount.",
             "counter",
-            &[(p.clone(), c.to_string())],
+            &life,
         );
     }
     t

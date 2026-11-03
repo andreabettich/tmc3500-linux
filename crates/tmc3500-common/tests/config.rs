@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tmc3500_common::config::{Config, ConfigError, SnmpVersion};
+use tmc3500_common::config::{Config, ConfigError, PrinterEntry, SnmpVersion};
 
 #[test]
 fn missing_file_gives_defaults() {
@@ -104,5 +104,101 @@ fn round_trips_through_toml() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("c.toml");
     std::fs::write(&p, s).unwrap();
+    assert_eq!(Config::load(&p).unwrap(), c);
+}
+
+fn parse(text: &str) -> Result<Config, ConfigError> {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("c.toml");
+    std::fs::write(&p, text).unwrap();
+    Config::load(&p)
+}
+
+fn entry(queue: &str, host: &str, snmp_port: Option<u16>) -> PrinterEntry {
+    PrinterEntry {
+        queue: queue.into(),
+        host: host.into(),
+        snmp_port,
+    }
+}
+
+#[test]
+fn several_printers_are_listed_with_the_single_printer_first() {
+    let c = parse(
+        "[printer]\nhost = \"192.0.2.1\"\n\
+         [[printers]]\nqueue = \"TM-C3500-2\"\nhost = \"192.0.2.2\"\n\
+         [[printers]]\nqueue = \"TM-C3500-3\"\nhost = \"192.0.2.3\"\nsnmp_port = 1161\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.printers(),
+        vec![
+            entry("TM-C3500", "192.0.2.1", None),
+            entry("TM-C3500-2", "192.0.2.2", None),
+            entry("TM-C3500-3", "192.0.2.3", Some(1161)),
+        ]
+    );
+    // a single printer, as before
+    let c = parse("[printer]\nhost = \"192.0.2.1\"\nqueue = \"Desk\"\n").unwrap();
+    assert_eq!(c.printers(), vec![entry("Desk", "192.0.2.1", None)]);
+    // nothing configured
+    assert!(Config::default().printers().is_empty());
+    // the list alone
+    let c = parse("[[printers]]\nqueue = \"A\"\nhost = \"h\"\n").unwrap();
+    assert_eq!(c.printers(), vec![entry("A", "h", None)]);
+    assert_eq!(c.printer_for_queue("A"), Some(entry("A", "h", None)));
+    assert_eq!(c.printer_for_queue("B"), None);
+}
+
+#[test]
+fn bad_printer_lists_are_reported_without_breaking_the_rest() {
+    let p = |q: &str, h: &str| format!("[[printers]]\nqueue = \"{q}\"\nhost = \"{h}\"\n");
+    for bad in [
+        format!("{}{}", p("A", "h1"), p("A", "h2")), // duplicate queue
+        format!("[printer]\nhost = \"h0\"\nqueue = \"A\"\n{}", p("A", "h1")), // clashes with [printer]
+        p("bad queue", "h"),
+        p("A", ""),
+        p("A", "two words"),
+        format!("{}snmp_port = 0\n", p("A", "h")),
+        (0..65)
+            .map(|i| p(&format!("Q{i}"), "h"))
+            .collect::<String>(),
+    ] {
+        // the file still loads (the CUPS backend does not use the list) ...
+        let c = parse(&bad).unwrap_or_else(|e| panic!("{e}:\n{bad}"));
+        // ... but the monitor and tmc3500ctl report the problem
+        assert!(c.validate_printers().is_err(), "accepted:\n{bad}");
+    }
+    // an unknown key is still a syntax error of the whole file
+    assert!(parse(&format!("{}colour = \"red\"\n", p("A", "h"))).is_err());
+    let ok = parse(&format!("{}{}", p("A", "h1"), p("B", "h2"))).unwrap();
+    assert!(ok.validate_printers().is_ok());
+}
+
+#[test]
+fn old_single_printer_configs_still_load() {
+    // older tmc3500ctl versions accepted any host string
+    let c = parse("[printer]\nhost = \"\"\n").unwrap();
+    assert!(c.printers().is_empty(), "an empty host is no printer");
+}
+
+#[test]
+fn bracketed_ipv6_hosts_are_unwrapped() {
+    let c = parse("[[printers]]\nqueue = \"A\"\nhost = \"[2001:db8::1]\"\n").unwrap();
+    assert_eq!(c.printers()[0].host, "2001:db8::1");
+}
+
+#[test]
+fn printer_list_round_trips() {
+    let c = Config {
+        printers_cfg: vec![
+            entry("TM-C3500-1", "192.0.2.1", None),
+            entry("TM-C3500-2", "fe80::2", Some(1161)),
+        ],
+        ..Default::default()
+    };
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("c.toml");
+    std::fs::write(&p, c.to_toml().unwrap()).unwrap();
     assert_eq!(Config::load(&p).unwrap(), c);
 }

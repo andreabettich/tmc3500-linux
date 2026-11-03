@@ -13,11 +13,17 @@ pub const ENV_PATH: &str = "TMC3500_CONFIG";
 pub const MAX_SIZE: u64 = 1024 * 1024;
 /// Longest timeout or interval accepted in the file (one week).
 const MAX_MS: u64 = 7 * 24 * 3600 * 1000;
+/// Most printers in `[[printers]]`.
+pub const MAX_PRINTERS: usize = 64;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
+    /// A single printer (the original layout; still supported).
     pub printer: PrinterCfg,
+    /// Further printers, one CUPS queue each: `[[printers]]` tables.
+    #[serde(rename = "printers", skip_serializing_if = "Vec::is_empty")]
+    pub printers_cfg: Vec<PrinterEntry>,
     pub snmp: SnmpCfg,
     pub backend: BackendCfg,
     pub alerts: AlertCfg,
@@ -45,6 +51,42 @@ impl Default for PrinterCfg {
             queue: "TM-C3500".into(),
         }
     }
+}
+
+/// One printer of a multi-printer installation: its CUPS queue and address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrinterEntry {
+    pub queue: String,
+    pub host: String,
+    /// SNMP port of this printer (default: `[snmp] port`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp_port: Option<u16>,
+}
+
+/// A CUPS queue name: 1–127 of `A-Z a-z 0-9 - _ .`.
+pub fn valid_queue(q: &str) -> bool {
+    !q.is_empty()
+        && q.len() <= 127
+        && q.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.')
+}
+
+/// `[2001:db8::1]` → `2001:db8::1` (hosts are kept without brackets, as in device URIs).
+fn unbracket(h: &str) -> String {
+    h.strip_prefix('[')
+        .and_then(|r| r.strip_suffix(']'))
+        .unwrap_or(h)
+        .to_string()
+}
+
+/// A host name or IP address (no spaces, controls, slashes, `@` or leading `-`).
+fn valid_host(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 253
+        && !h.starts_with('-')
+        && h.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-_:[]%".contains(&c))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,11 +333,75 @@ impl Config {
         toml::to_string_pretty(self).map_err(|e| ConfigError::Parse(e.to_string()))
     }
 
+    /// Every configured printer: `[printer]` (if it has a host) first, then `[[printers]]`.
+    pub fn printers(&self) -> Vec<PrinterEntry> {
+        let mut v = Vec::new();
+        if let Some(h) = self.printer.host.as_deref().filter(|h| !h.is_empty()) {
+            v.push(PrinterEntry {
+                queue: self.printer.queue.clone(),
+                host: unbracket(h),
+                snmp_port: None,
+            });
+        }
+        v.extend(self.printers_cfg.iter().map(|p| PrinterEntry {
+            host: unbracket(&p.host),
+            ..p.clone()
+        }));
+        v
+    }
+
+    /// The configured printer of CUPS queue `queue`.
+    pub fn printer_for_queue(&self, queue: &str) -> Option<PrinterEntry> {
+        self.printers().into_iter().find(|p| p.queue == queue)
+    }
+
+    /// SNMP port of `p` (its own, else `[snmp] port`).
+    pub fn snmp_port_of(&self, p: &PrinterEntry) -> u16 {
+        p.snmp_port.unwrap_or(self.snmp.port)
+    }
+
     pub fn thresholds(&self) -> Thresholds {
         Thresholds {
             ink_low_percent: self.thresholds_cfg.ink_low_percent,
             waste_near_full_percent: self.thresholds_cfg.waste_near_full_percent,
         }
+    }
+
+    /// Check `[[printers]]`. Separate from [`Config::validate`]: the CUPS backend uses the queue's
+    /// device URI, not this list, so a mistake here must not stop printing. The monitor and
+    /// `tmc3500ctl` call it.
+    pub fn validate_printers(&self) -> Result<(), ConfigError> {
+        let bad = |s: String| Err(ConfigError::Invalid(s));
+        if self.printers_cfg.len() > MAX_PRINTERS {
+            return bad(format!("at most {MAX_PRINTERS} [[printers]]"));
+        }
+        for p in &self.printers_cfg {
+            if !valid_queue(&p.queue) {
+                return bad(format!(
+                    "printers: queue {:?} must be a CUPS queue name (A-Z a-z 0-9 - _ .)",
+                    p.queue
+                ));
+            }
+            if !valid_host(&p.host) {
+                return bad(format!(
+                    "printers: host {:?} of {} must be a host name or IP address",
+                    p.host, p.queue
+                ));
+            }
+            if p.snmp_port == Some(0) {
+                return bad(format!(
+                    "printers: snmp_port of {} must be 1..=65535",
+                    p.queue
+                ));
+            }
+        }
+        let all = self.printers();
+        for (i, p) in all.iter().enumerate() {
+            if all[..i].iter().any(|q| q.queue == p.queue) {
+                return bad(format!("queue {} is configured twice", p.queue));
+            }
+        }
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -312,13 +418,7 @@ impl Config {
         if self.snmp.retries > 10 {
             return bad("snmp.retries must be 0..=10".into());
         }
-        if self.printer.queue.is_empty()
-            || !self
-                .printer
-                .queue
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.')
-        {
+        if !valid_queue(&self.printer.queue) {
             return bad("printer.queue must be a CUPS queue name (A-Z a-z 0-9 - _ .)".into());
         }
         let b = &self.backend;

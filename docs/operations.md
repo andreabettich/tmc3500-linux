@@ -17,6 +17,21 @@ lpstat -p TM-C3500
 `--apply` it writes the configuration file but only prints the `lpadmin` command. Re-run it with the new
 address whenever the printer's IP changes.
 
+**Several printers:** run `setup` once per printer, each with its own queue name:
+
+```sh
+sudo tmc3500ctl setup --printer 192.0.2.51 --queue TM-C3500-1 --apply
+sudo tmc3500ctl setup --printer 192.0.2.52 --queue TM-C3500-2 --apply
+```
+
+Each run adds the printer to `[[printers]]` in the configuration and creates its CUPS queue. Running
+it for a queue that is already configured changes that queue's address; running it for an address
+that is already configured with a new `--queue` renames that printer's queue (delete the old CUPS
+queue with `lpadmin -x`). Use the same address form (IP or name) in `setup` and in the queue, so
+the backend and the monitor recognise one printer. The monitor watches every configured printer.
+To remove a printer, delete its `[[printers]]` entry, run `sudo lpadmin -x <queue>` and
+`sudo systemctl restart tmc3500-monitor`.
+
 Installed files:
 
 | path | what |
@@ -70,6 +85,8 @@ tmc3500ctl ink
 tmc3500ctl counters
 ```
 
+With several printers these show every printer; `--queue TM-C3500-2` shows one.
+
 `nozzle-check` and `clean` exist but are disabled until their commands have been recorded from the real
 printer (phase 5).
 
@@ -102,7 +119,8 @@ by the filter with an `ERROR:` line naming the option.
 Every event (state change, ink low/empty, maintenance box, media out, jam, cover open, job held or failed,
 unreachable, recovered) is passed as JSON on stdin to each executable in `/etc/tmc3500/alert.d/`. Hooks
 must be owned by root and not group/world-writable; symlinks are ignored. Repeats are suppressed for
-`repeat_interval_s` (default 1 h).
+`repeat_interval_s` (default 1 h), per printer: the same problem on two printers is reported for each.
+Every event names the printer's address (`printer`) and CUPS queue (`queue`).
 
 - **syslog** (`50-syslog`): active by default (`journalctl -t tmc3500`).
 - **mail** (`60-mail`): install `msmtp`, configure `/etc/msmtprc`, set `MAIL_TO=` in
@@ -112,6 +130,7 @@ must be owned by root and not group/world-writable; symlinks are ignored. Repeat
 
 The monitor writes `/var/lib/prometheus/node-exporter/tmc3500.prom` every 30 s for node_exporter's
 textfile collector (create the directory if node_exporter is not installed, or change `[monitor] textfile`).
+With several printers, the file holds all of them, labelled `printer` and `queue`.
 
 Test the chain: `sudo -u tmc3500 /etc/tmc3500/alert.d/50-syslog < /dev/null` should log a line.
 
@@ -147,7 +166,7 @@ in the source tree.
   IPAddressDeny=any
   IPAddressAllow=192.0.2.50 localhost <mail-relay-ip> <webhook-ip> <dns-server-ip>
   ```
-  Test an alert afterwards (section 5).
+  With several printers, list every printer's address. Test an alert afterwards (section 5).
 - **SNMP:** set a non-default read community on the printer and in `[snmp] community`. A non-default
   SNMP port or community can also be given in the device URI:
   `lpadmin -p TM-C3500 -v 'tmc3500://192.0.2.50:9100/?snmp-port=1161&community=xyz'` (the `/` before `?`

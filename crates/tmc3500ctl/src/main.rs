@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tmc3500_common::alert::write_atomic;
-use tmc3500_common::config::Config;
+use tmc3500_common::config::{valid_queue, Config, PrinterEntry};
 use tmc3500_common::snmp::{resolve, SnmpClient};
 use tmc3500_common::time::rfc3339;
 use tmc3500_common::uri::DeviceUri;
@@ -45,9 +45,15 @@ struct Cli {
 
 #[derive(Args, Debug)]
 struct Target {
-    /// Printer address (default: [printer] host from the config).
-    #[arg(long)]
+    /// Printer address (default: every configured printer).
+    #[arg(long, conflicts_with_all = ["queue", "all"])]
     printer: Option<String>,
+    /// Only the printer of this CUPS queue.
+    #[arg(long, conflicts_with = "all")]
+    queue: Option<String>,
+    /// Every configured printer, as a list (the default when several are configured).
+    #[arg(long)]
+    all: bool,
 }
 
 #[derive(Args, Debug)]
@@ -152,6 +158,15 @@ fn run(cli: Cli) -> i32 {
             )
         }
     }
+    if !matches!(cli.cmd, Cmd::Setup { .. }) {
+        if let Err(e) = ctx.cfg.validate_printers() {
+            return ctx.fail(
+                EXIT_ERROR,
+                &format!("{}: {e}", cfg_path.display()),
+                json!({}),
+            );
+        }
+    }
     match cli.cmd {
         Cmd::Status(t) => status(&ctx, &t, View::Status),
         Cmd::Ink(t) => status(&ctx, &t, View::Ink),
@@ -188,31 +203,55 @@ fn bracket(host: &str) -> String {
     }
 }
 
-fn query(ctx: &Ctx, t: &Target) -> Result<(String, PrinterStatus), (i32, String, Value)> {
-    let host = t
-        .printer
-        .clone()
-        .or_else(|| ctx.cfg.printer.host.clone())
-        .ok_or((
+/// The printers a status command is about, and whether to answer with a list.
+fn targets(ctx: &Ctx, t: &Target) -> Result<(Vec<PrinterEntry>, bool), (i32, String, Value)> {
+    if let Some(host) = &t.printer {
+        let queue = ctx.cfg.printer.queue.clone();
+        let p = ctx.cfg.printers().into_iter().find(|p| &p.host == host);
+        return Ok((
+            vec![p.unwrap_or(PrinterEntry {
+                queue,
+                host: host.clone(),
+                snmp_port: None,
+            })],
+            false,
+        ));
+    }
+    let all = ctx.cfg.printers();
+    if let Some(q) = &t.queue {
+        return match ctx.cfg.printer_for_queue(q) {
+            Some(p) => Ok((vec![p], false)),
+            None => Err((
+                EXIT_ERROR,
+                format!(
+                    "no printer configured for queue {q} (configured: {})",
+                    all.iter()
+                        .map(|p| p.queue.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                json!({}),
+            )),
+        };
+    }
+    if all.is_empty() {
+        return Err((
             EXIT_ERROR,
             "no printer configured: run `tmc3500ctl setup --printer <ip>` or pass --printer".into(),
             json!({}),
-        ))?;
-    let auth = format!("{}:{}", bracket(&host), ctx.cfg.snmp.port);
-    let unreachable = |e: String| {
-        (
-            EXIT_UNREACHABLE,
-            format!("printer {host} unreachable: {e}"),
-            json!({ "printer": host, "reachable": false, "error": e }),
-        )
-    };
-    let addr = resolve(&auth).map_err(|e| unreachable(e.to_string()))?;
+        ));
+    }
+    let list = t.all || all.len() > 1;
+    Ok((all, list))
+}
+
+/// Query one printer over SNMP.
+fn query(ctx: &Ctx, p: &PrinterEntry) -> Result<PrinterStatus, String> {
+    let auth = format!("{}:{}", bracket(&p.host), ctx.cfg.snmp_port_of(p));
+    let addr = resolve(&auth).map_err(|e| e.to_string())?;
     let c = &ctx.cfg.snmp;
     let client = SnmpClient::new(addr, &c.community, c.version.wire(), c.timeout(), c.retries);
-    let st = client
-        .query_full()
-        .map_err(|e| unreachable(e.to_string()))?;
-    Ok((host, st))
+    client.query_full().map_err(|e| e.to_string())
 }
 
 fn level_state(s: &Supply, thr: &Thresholds) -> &'static str {
@@ -275,15 +314,74 @@ fn supplies_text(st: &PrinterStatus, thr: &Thresholds) -> String {
 }
 
 fn status(ctx: &Ctx, t: &Target, view: View) -> i32 {
-    let thr = ctx.cfg.thresholds();
-    let (host, st) = match query(ctx, t) {
+    let (printers, list) = match targets(ctx, t) {
         Ok(v) => v,
         Err((code, msg, extra)) => return ctx.fail(code, &msg, extra),
     };
+    // Query all at once, so one unreachable printer does not delay the others.
+    let results: Vec<Result<PrinterStatus, String>> = std::thread::scope(|sc| {
+        let handles: Vec<_> = printers
+            .iter()
+            .map(|p| sc.spawn(move || query(ctx, p)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("query failed".into())))
+            .collect()
+    });
+    if !list {
+        let p = &printers[0];
+        return match &results[0] {
+            Ok(st) => {
+                let (v, text) = render_status(ctx, p, st, view);
+                ctx.print(&v, || text);
+                0
+            }
+            Err(e) => ctx.fail(
+                EXIT_UNREACHABLE,
+                &format!("printer {} unreachable: {e}", p.host),
+                json!({ "queue": p.queue, "printer": p.host, "reachable": false, "error": e }),
+            ),
+        };
+    }
+    let mut values = Vec::new();
+    let mut text = String::new();
+    let mut code = 0;
+    for (p, r) in printers.iter().zip(&results) {
+        text.push_str(&format!("== {} ==\n", p.queue));
+        match r {
+            Ok(st) => {
+                let (v, t) = render_status(ctx, p, st, view);
+                values.push(v);
+                text.push_str(&t);
+            }
+            Err(e) => {
+                code = EXIT_UNREACHABLE;
+                values.push(
+                    json!({ "queue": p.queue, "printer": p.host, "reachable": false, "error": e }),
+                );
+                text.push_str(&format!("Printer:  {} unreachable: {e}\n", p.host));
+                eprintln!(
+                    "tmc3500ctl: printer {} ({}) unreachable: {e}",
+                    p.queue, p.host
+                );
+            }
+        }
+        text.push('\n');
+    }
+    ctx.print(&json!({ "printers": values }), || text);
+    code
+}
+
+/// JSON and human text for one reachable printer.
+fn render_status(ctx: &Ctx, p: &PrinterEntry, st: &PrinterStatus, view: View) -> (Value, String) {
+    let thr = ctx.cfg.thresholds();
+    let host = &p.host;
     let reasons: Vec<&str> = st.reasons(&thr).into_iter().collect();
     let supplies: Vec<Value> = st.supplies.iter().map(|s| supply_json(s, &thr)).collect();
     let v = match view {
         View::Status => json!({
+            "queue": p.queue,
             "printer": host,
             "reachable": true,
             "sys_descr": st.sys_descr,
@@ -294,8 +392,11 @@ fn status(ctx: &Ctx, t: &Target, view: View) -> i32 {
             "errors": st.errors.iter().map(|e| e.name()).collect::<Vec<_>>(),
             "supplies": supplies,
         }),
-        View::Ink => json!({ "printer": host, "reachable": true, "supplies": supplies }),
+        View::Ink => {
+            json!({ "queue": p.queue, "printer": host, "reachable": true, "supplies": supplies })
+        }
         View::Counters => json!({
+            "queue": p.queue,
             "printer": host,
             "reachable": true,
             "sys_descr": st.sys_descr,
@@ -304,7 +405,7 @@ fn status(ctx: &Ctx, t: &Target, view: View) -> i32 {
             "power_on_count": st.power_on_count,
         }),
     };
-    ctx.print(&v, || match view {
+    let text = match view {
         View::Status => {
             let mut o = format!(
                 "Printer:  {host}{}\n",
@@ -330,10 +431,10 @@ fn status(ctx: &Ctx, t: &Target, view: View) -> i32 {
                 }
             }
             o.push_str("Supplies:\n");
-            o.push_str(&supplies_text(&st, &thr));
+            o.push_str(&supplies_text(st, &thr));
             o
         }
-        View::Ink => format!("Supplies of {host}:\n{}", supplies_text(&st, &thr)),
+        View::Ink => format!("Supplies of {host}:\n{}", supplies_text(st, &thr)),
         View::Counters => {
             let opt = |v: Option<u64>| v.map_or("n/a".to_string(), |v| v.to_string());
             format!(
@@ -344,8 +445,8 @@ fn status(ctx: &Ctx, t: &Target, view: View) -> i32 {
                 opt(st.power_on_count),
             )
         }
-    });
-    0
+    };
+    (v, text)
 }
 
 fn maintenance(ctx: &Ctx, name: &str, m: &Maint) -> i32 {
@@ -413,13 +514,6 @@ fn run_tool(prog: &str, args: &[String]) -> Result<String, String> {
     }
 }
 
-fn valid_queue(q: &str) -> bool {
-    !q.is_empty()
-        && q.len() <= 127
-        && q.bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.')
-}
-
 fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply: bool) -> i32 {
     let uri = format!("tmc3500://{}", bracket(printer));
     if printer.starts_with('-') || DeviceUri::parse(&uri).is_err() {
@@ -430,18 +524,42 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
         );
     }
     let mut cfg = ctx.cfg.clone();
-    cfg.printer.host = Some(printer.to_string());
-    if let Some(q) = queue {
-        cfg.printer.queue = q;
-    }
-    if !valid_queue(&cfg.printer.queue) {
+    let queue = queue.unwrap_or_else(|| cfg.printer.queue.clone());
+    if !valid_queue(&queue) {
         return ctx.fail(EXIT_ERROR, "invalid queue name", json!({}));
     }
+    // One entry per queue and per printer: a known queue gets the new address, a known address
+    // gets the new queue name (a renamed queue), anything else is added.
+    let host = printer.to_string();
+    let mut snmp_port = None;
+    let legacy_host = cfg.printer.host.clone().filter(|h| !h.is_empty());
+    if let Some(e) = cfg.printers_cfg.iter_mut().find(|p| p.queue == queue) {
+        e.host = host;
+        snmp_port = e.snmp_port;
+    } else if cfg.printer.queue == queue {
+        cfg.printer.host = Some(host);
+    } else if let Some(e) = cfg.printers_cfg.iter_mut().find(|p| p.host == host) {
+        e.queue = queue.clone();
+        snmp_port = e.snmp_port;
+    } else if legacy_host.is_none() || legacy_host.as_deref() == Some(host.as_str()) {
+        cfg.printer.host = Some(host);
+        cfg.printer.queue = queue.clone();
+    } else {
+        cfg.printers_cfg.push(PrinterEntry {
+            queue: queue.clone(),
+            host,
+            snmp_port: None,
+        });
+    }
+    let uri = match snmp_port {
+        Some(port) => format!("{uri}:9100/?snmp-port={port}"),
+        None => uri,
+    };
     let ppd_s = ppd.to_string_lossy().into_owned();
     if ppd_s.starts_with('-') || ppd_s.chars().any(char::is_control) {
         return ctx.fail(EXIT_ERROR, "invalid PPD path", json!({}));
     }
-    if let Err(e) = cfg.validate() {
+    if let Err(e) = cfg.validate().and_then(|()| cfg.validate_printers()) {
         return ctx.fail(EXIT_ERROR, &e.to_string(), json!({}));
     }
     let text = match cfg.to_toml() {
@@ -467,7 +585,7 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
     ctx.cfg = cfg;
     let args: Vec<String> = [
         "-p",
-        &ctx.cfg.printer.queue,
+        &queue,
         "-E",
         "-v",
         &uri,
@@ -500,6 +618,7 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
     }
     let v = json!({
         "ok": true,
+        "queue": queue,
         "printer": printer,
         "config": ctx.cfg_path,
         "uri": uri,
@@ -523,19 +642,54 @@ fn setup(ctx: &mut Ctx, printer: &str, queue: Option<String>, ppd: &Path, apply:
 const REPRINT_WARNING: &str = "Warning: a released job prints again from the start, so it may reprint labels that were already printed. Check the printer output first.";
 
 fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes: bool) -> i32 {
-    let queue = queue.unwrap_or_else(|| ctx.cfg.printer.queue.clone());
-    if !valid_queue(&queue) {
+    // The given queue, else every configured one.
+    let explicit = queue.is_some();
+    let queues: Vec<String> = match queue {
+        Some(q) => vec![q],
+        None => {
+            let mut v: Vec<String> = ctx.cfg.printers().into_iter().map(|p| p.queue).collect();
+            if v.is_empty() {
+                v.push(ctx.cfg.printer.queue.clone());
+            }
+            v
+        }
+    };
+    if !queues.iter().all(|q| valid_queue(q)) {
         return ctx.fail(EXIT_ERROR, "invalid queue name", json!({}));
     }
-    let out = match run_tool("lpstat", &["-l".into(), "-o".into(), queue.clone()]) {
-        Ok(o) => o,
-        Err(e) => return ctx.fail(EXIT_ERROR, &e, json!({ "queue": queue })),
-    };
-    let held = lpstat::held_jobs(&out, &queue);
+    let mut warnings = Vec::new();
+    let mut held: Vec<String> = Vec::new();
+    let mut seen = Vec::new();
+    for q in &queues {
+        match run_tool("lpstat", &["-l".into(), "-o".into(), q.clone()]) {
+            Ok(out) => {
+                held.extend(lpstat::held_jobs(&out, q));
+                seen.push(q.clone());
+            }
+            // A configured queue missing from CUPS must not block releasing jobs elsewhere.
+            Err(e) if !explicit => warnings.push(format!("queue {q} skipped: {e}")),
+            Err(e) => return ctx.fail(EXIT_ERROR, &e, json!({ "queue": q, "queues": [q] })),
+        }
+    }
+    if seen.is_empty() {
+        return ctx.fail(
+            EXIT_ERROR,
+            &format!("cannot list jobs: {}", warnings.join("; ")),
+            json!({ "queue": null, "queues": queues }),
+        );
+    }
+    let queues = seen;
+    let single = (queues.len() == 1).then(|| queues[0].clone());
+    let queue = queues.join(", ");
     let mut targets = Vec::new();
     for j in jobs {
         let id = if !j.is_empty() && j.bytes().all(|c| c.is_ascii_digit()) {
-            format!("{queue}-{j}")
+            // a bare job number: whichever queue holds it
+            queues
+                .iter()
+                .map(|q| format!("{q}-{j}"))
+                .find(|id| held.contains(id))
+                .unwrap_or_else(|| j.clone())
         } else {
             j.clone()
         };
@@ -546,7 +700,7 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
                     "{j} is not a held job on {queue} (held: {})",
                     held.join(", ")
                 ),
-                json!({ "queue": queue, "held": held }),
+                json!({ "queue": single, "queues": queues, "held": held }),
             );
         }
         if !targets.contains(&id) {
@@ -563,7 +717,7 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
                 "held jobs on {queue}: {}. {REPRINT_WARNING} Release one with --job <id>, or all with --yes.",
                 held.join(", ")
             ),
-            json!({ "queue": queue, "held": held, "warning": REPRINT_WARNING }),
+            json!({ "queue": single, "queues": queues, "held": held, "warning": REPRINT_WARNING }),
         );
     }
     if !ctx.json && !dry_run && !targets.is_empty() {
@@ -572,7 +726,6 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
     }
     let mut released = Vec::new();
     let mut failed = Vec::new();
-    let mut warnings = Vec::new();
     if !dry_run {
         for id in &targets {
             // Remove the partial-send marker BEFORE resuming: CUPS restarts the job at once, and a
@@ -613,7 +766,8 @@ fn release(ctx: &Ctx, queue: Option<String>, dry_run: bool, jobs: &[String], yes
     let ok = failed.is_empty();
     let v = json!({
         "ok": ok,
-        "queue": queue,
+        "queue": single,
+        "queues": queues,
         "dry_run": dry_run,
         "held": held,
         "released": released,
