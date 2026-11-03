@@ -5,4 +5,5 @@ pub mod cupsopts;
 pub mod error;
 pub mod geometry;
 pub mod options;
+pub mod rle;
 pub mod units;
