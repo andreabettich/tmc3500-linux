@@ -35,7 +35,14 @@ cargo test --workspace          # includes 105 byte-exact comparisons with Windo
 packaging/build-debs.sh         # target/<triple>/debian/tmc3500_<version>_<arch>.deb
 ```
 
-## Licence and Epson material
+## Licence
 
-Licensed MIT OR Apache-2.0. The repository and packages contain no Epson files. The colour tables
-are our own data, fitted from the Windows driver's printed output.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT),
+at your option. Unless you explicitly state otherwise, any contribution you intentionally submit for
+inclusion in this project, as defined in the Apache-2.0 licence, is dual licensed as above, without
+any additional terms or conditions.
+
+This is an unofficial driver. It is not made, endorsed or supported by Seiko Epson Corporation.
+"Epson", "ColorWorks" and "TM-C3500" are trademarks of Seiko Epson Corporation. The repository and
+packages contain no Epson files. The colour tables are our own data, fitted from the Windows
+driver's printed output.

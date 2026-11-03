@@ -20,7 +20,7 @@ tempfile = "3"
 [package.metadata.deb]
 name = "tmc3500"
 maintainer = "TM-C3500 Linux driver maintainers"
-copyright = "2026, TM-C3500 Linux driver contributors"
+copyright = "2026, Andrea Bettich and contributors"
 extended-description = """\
 CUPS driver for the Epson TM-C3500 ColorWorks label printer: raster filter (rastertotmc3500), \
 network backend with status monitoring and job holding (tmc3500), idle status monitor with alerts \
