@@ -1,0 +1,66 @@
+[Unit]
+Description=Epson TM-C3500 status monitor (SNMP polling, alerts, Prometheus textfile)
+Documentation=man:tmc3500ctl(1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tmc3500-monitor
+Restart=on-failure
+RestartSec=10s
+
+# Dedicated system user created by the package (postinst): `adduser --system --group tmc3500`.
+# Not DynamicUser: the textfile directory and the alert state shared with the CUPS backend need a
+# stable owner.
+User=tmc3500
+Group=tmc3500
+StateDirectory=tmc3500
+StateDirectoryMode=0750
+
+# Hardening (spec section 6)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+# AF_UNIX for syslog/logger alert hooks; AF_INET/AF_INET6 for SNMP and webhooks.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# Prometheus node_exporter textfile collector directory ([monitor] textfile in tmc3500.toml).
+# The '-' prefix ignores the path if node_exporter is not installed.
+ReadWritePaths=-/var/lib/prometheus/node-exporter
+
+# Network restriction to the printer is site-specific. Create a drop-in with
+#   systemctl edit tmc3500-monitor
+# containing, for example:
+#
+#   [Service]
+#   IPAddressDeny=any
+#   IPAddressAllow=192.0.2.50
+#   # add your mail relay / webhook endpoints if alert hooks need them:
+#   #IPAddressAllow=192.0.2.25
+#
+# Mail hook through the local MTA (e.g. Postfix sendmail) needs its spool writable:
+#   ReadWritePaths=/var/spool/postfix/maildrop
+
+[Install]
+WantedBy=multi-user.target

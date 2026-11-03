@@ -1,0 +1,17 @@
+[package]
+name = "tmc3500-monitor"
+description = "TM-C3500 status monitor: SNMP polling, alerts on change, Prometheus textfile"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tmc3500-core = { path = "../tmc3500-core" }
+tmc3500-common = { path = "../tmc3500-common" }
+clap = { version = "4", features = ["derive"] }
+signal-hook = "0.4"
+
+[dev-dependencies]
+tmc3500-fakeprinter = { path = "../tmc3500-fakeprinter" }
+tempfile = "3"
+serde_json = "1"
