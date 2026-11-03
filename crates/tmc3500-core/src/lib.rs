@@ -15,5 +15,6 @@ pub mod protocol;
 pub mod raster;
 pub mod reassemble;
 pub mod rle;
+pub mod status;
 pub mod units;
 pub mod weave;

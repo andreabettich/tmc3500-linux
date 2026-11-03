@@ -1,0 +1,39 @@
+#!/bin/sh
+# tmc3500 alert hook: send the event by mail with msmtp (an SMTP client, `apt install msmtp`).
+# msmtp needs no setuid/setgid helper, so it works under the hardened tmc3500-monitor unit
+# (NoNewPrivileges=yes); the MTA's sendmail(1) usually does not (setgid postdrop / setuid).
+# Disabled unless MAIL_TO is set in /etc/tmc3500/alert.env (KEY=value lines; not sourced):
+#   MAIL_TO=ops@example.com
+#   MAIL_FROM=tmc3500@printhost.example.com
+# SMTP relay settings go in /etc/msmtprc (system-wide, readable by lp and tmc3500), e.g.
+#   account default
+#   host smtp.example.com
+#   port 587
+#   tls on
+#   from tmc3500@printhost.example.com
+# With the monitor's IPAddressAllow drop-in, also allow the relay's address.
+set -u
+env_file=${TMC3500_ALERT_ENV:-/etc/tmc3500/alert.env}
+MAIL_TO=; MAIL_FROM=
+if [ -r "$env_file" ]; then
+    while IFS='=' read -r k v; do
+        case "$k" in
+            MAIL_TO) MAIL_TO=$v ;;
+            MAIL_FROM) MAIL_FROM=$v ;;
+        esac
+    done < "$env_file"
+fi
+[ -n "$MAIL_TO" ] || exit 0
+# header values: strip anything but plain address characters
+MAIL_TO=$(printf '%s' "$MAIL_TO" | tr -cd 'A-Za-z0-9@._+, -')
+MAIL_FROM=$(printf '%s' "${MAIL_FROM:-tmc3500@localhost}" | tr -cd 'A-Za-z0-9@._+-')
+event=$(printf '%s' "${TMC3500_EVENT:-unknown}" | tr -cd 'a-z0-9:._-')
+severity=$(printf '%s' "${TMC3500_SEVERITY:-info}" | tr -cd 'a-z')
+json=$(head -c 65536)
+{
+    printf 'To: %s\n' "$MAIL_TO"
+    printf 'From: %s\n' "$MAIL_FROM"
+    printf 'Subject: [tmc3500] %s: %s\n' "$severity" "$event"
+    printf 'Content-Type: text/plain; charset=utf-8\n\n'
+    printf '%s\n' "$json"
+} | "${MSMTP:-msmtp}" --read-envelope-from -t

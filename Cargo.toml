@@ -1,7 +1,16 @@
 [workspace]
 resolver = "2"
 exclude = ["fuzz"]
-members = ["crates/tmc3500-core", "crates/rastertotmc3500", "crates/xtask"]
+members = [
+    "crates/tmc3500-core",
+    "crates/rastertotmc3500",
+    "crates/xtask",
+    "crates/tmc3500-common",
+    "crates/tmc3500-fakeprinter",
+    "crates/tmc3500-backend",
+    "crates/tmc3500-monitor",
+    "crates/tmc3500ctl",
+]
 
 [workspace.package]
 edition = "2021"

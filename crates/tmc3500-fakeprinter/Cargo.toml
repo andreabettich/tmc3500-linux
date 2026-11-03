@@ -1,0 +1,12 @@
+[package]
+name = "tmc3500-fakeprinter"
+description = "Simulated TM-C3500 (job port + SNMP agent + fault injection) for integration tests"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+tmc3500-core = { path = "../tmc3500-core" }
+tmc3500-common = { path = "../tmc3500-common" }
+clap = { version = "4", features = ["derive"] }

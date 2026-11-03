@@ -1,0 +1,59 @@
+# /etc/tmc3500/tmc3500.toml: configuration of the TM-C3500 backend, monitor and tmc3500ctl.
+# Every key is optional; the values shown are the built-in defaults. Unknown keys are an error.
+# Durations are in milliseconds unless the name says otherwise.
+
+[printer]
+# Printer address for tmc3500-monitor and tmc3500ctl (the CUPS backend uses the queue's device
+# URI, tmc3500://host[:port]). Set by `tmc3500ctl setup --printer <ip>`.
+#host = "192.0.2.50"
+port = 9100
+# CUPS queue name (tmc3500ctl setup / release-held-jobs).
+queue = "TM-C3500"
+
+[snmp]
+enabled = true
+port = 161
+community = "public"
+# "1" or "2c"
+version = "2c"
+timeout_ms = 1500
+retries = 2
+
+[backend]
+# TCP connect timeout per attempt.
+connect_timeout_ms = 10000
+# Timeout of a single socket read/write.
+io_timeout_ms = 10000
+# Status polling interval while waiting for the printer.
+status_interval_ms = 5000
+# Retry delays when the printer is unreachable before the job starts (doubling).
+retry_initial_ms = 2000
+retry_max_ms = 60000
+# Hold the job (and alert) when the printer stays unreachable this long.
+unreachable_hold_after_ms = 600000
+# Hold the job when the printer accepts no data for this long without reporting an error.
+stall_timeout_ms = 300000
+# After sending, wait this long for the printer to close the connection.
+drain_timeout_ms = 60000
+
+[alerts]
+# Every executable here gets each event as JSON on stdin.
+dir = "/etc/tmc3500/alert.d"
+hook_timeout_ms = 10000
+# The same event key is not sent again within this many seconds (0 = never suppress).
+repeat_interval_s = 3600
+# Alert repeat-suppression state (alerts.json), shared by the backend and the monitor.
+state_dir = "/var/lib/tmc3500"
+
+[monitor]
+interval_ms = 30000
+# Prometheus node_exporter textfile collector output.
+textfile = "/var/lib/prometheus/node-exporter/tmc3500.prom"
+# Mode of the textfile: node_exporter must be able to read it (0o640 if it shares a group).
+textfile_mode = 0o644
+
+[thresholds]
+# Ink is "low" at or below this percentage.
+ink_low_percent = 10
+# The maintenance box is "near full" at or above this percentage used.
+waste_near_full_percent = 90
