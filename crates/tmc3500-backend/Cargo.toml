@@ -4,6 +4,7 @@ description = "CUPS backend for the Epson TM-C3500 (tmc3500://host[:port])"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+publish = false
 
 [[bin]]
 name = "tmc3500"

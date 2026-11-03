@@ -1,0 +1,49 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show   # installs the toolchain pinned in rust-toolchain.toml
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Soak (short)
+        run: SOAK_JOBS=200 cargo test -p tmc3500-backend --release --locked --test backend soak -- --ignored
+
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install --locked cargo-audit cargo-deny
+      - run: cargo audit
+      - run: cargo deny check
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz
+      - name: Short fuzz run per target
+        working-directory: fuzz
+        run: |
+          for t in cupsraster options decode colour_table; do
+            cargo +nightly fuzz run "$t" -- -max_total_time=60 -rss_limit_mb=1024
+          done
+
+  packages:
+    needs: [test, supply-chain]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show && cargo install --locked cargo-deb
+      - run: packaging/build-debs.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debs
+          path: target/*/debian/*.deb

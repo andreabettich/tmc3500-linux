@@ -4,6 +4,7 @@ description = "TM-C3500 status monitor: SNMP polling, alerts on change, Promethe
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+publish = false
 
 [dependencies]
 tmc3500-core = { path = "../tmc3500-core" }

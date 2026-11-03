@@ -3,6 +3,7 @@ name = "tmc3500-core"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+publish = false
 
 [dependencies]
 

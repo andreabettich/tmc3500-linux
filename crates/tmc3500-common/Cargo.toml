@@ -4,6 +4,7 @@ description = "Shared runtime code for the TM-C3500 backend, monitor and CLI: co
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+publish = false
 
 [dependencies]
 tmc3500-core = { path = "../tmc3500-core" }

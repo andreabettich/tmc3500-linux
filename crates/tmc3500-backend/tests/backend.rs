@@ -751,3 +751,68 @@ fn empty_job_does_not_touch_the_printer() {
         r.stderr
     );
 }
+
+/// Soak test: many jobs with random faults against one fake printer. Run with
+/// `SOAK_JOBS=1000 cargo test -p tmc3500-backend --release --test backend soak -- --ignored`.
+/// Invariants: exit 0 ⇒ exactly one new, byte-identical delivery; exit 3 (hold) ⇒ no complete
+/// delivery; no other exit code; no job takes longer than its bound.
+#[test]
+#[ignore]
+fn soak_random_faults_never_lose_or_duplicate() {
+    let n: u64 = std::env::var("SOAK_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let job = big_job();
+    let h = H::new(&job);
+    let mut rng: u64 = 0x5eed_1234_abcd_0001;
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+    let (mut ok, mut held) = (0, 0);
+    for i in 0..n {
+        let fault = next() % 20;
+        let at = 1000 + next() % (job.len() as u64 - 2000);
+        match fault {
+            0 | 1 => h.fake.set_drop_after(Some(at)),
+            2 | 3 => h.fake.set_paper_out_after(Some(at)),
+            4 => h.fake.set_slow_read(Some((4096, Duration::from_millis(2)))),
+            5 => h.fake.set_snmp_mode(SnmpMode::Garbage),
+            _ => {}
+        }
+        let before = h.fake.accepted_jobs().len();
+        let id = format!("{}", 1000 + i);
+        let child = h
+            .cmd(&h.uri())
+            .args([id.as_str(), "soak", "label", "1", "", h.job_file.to_str().unwrap()])
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        if fault == 2 || fault == 3 {
+            // clear the paper-out a little later, as an operator would
+            std::thread::sleep(Duration::from_millis(300 + next() % 400));
+            h.fake.set_paper_out_after(None);
+            h.fake.set_paper_out(false);
+        }
+        let r = finish(child, Duration::from_secs(30));
+        let after = h.fake.accepted_jobs();
+        let new = after.len() - before;
+        match r.code {
+            0 => {
+                assert_eq!(new, 1, "job {id} (fault {fault}) exit 0 but {new} deliveries\n{}", r.stderr);
+                assert!(after.last() == Some(&job), "job {id}: delivered bytes differ");
+                ok += 1;
+            }
+            3 => {
+                assert_eq!(new, 0, "job {id} (fault {fault}) held but delivered\n{}", r.stderr);
+                held += 1;
+            }
+            c => panic!("job {id} (fault {fault}): unexpected exit {c}\n{}", r.stderr),
+        }
+        h.fake.set_drop_after(None);
+        h.fake.set_slow_read(None);
+        h.fake.set_snmp_mode(SnmpMode::Normal);
+    }
+    eprintln!("soak: {n} jobs, {ok} printed, {held} held");
+    assert!(ok > 0 && held > 0);
+}
