@@ -34,24 +34,27 @@ pub fn render_page<R: Read>(
     let (dev_h, dev_v) = (u64::from(360 * area.hscale), 360u64);
     let (src_h, src_v) = (u64::from(h.hw_res[0]), u64::from(h.hw_res[1]));
     let same_cols = src_h == dev_h;
+    // A raster larger than the printable area (CUPS renders the whole media) is centred on it.
+    let off_x = (u64::from(h.width) * dev_h / src_h).saturating_sub(u64::from(area.width)) / 2;
+    let off_y = (u64::from(h.height) * dev_v / src_v).saturating_sub(u64::from(area.height)) / 2;
     let mut src = vec![0u8; h.width as usize * 3];
     let mut dev = vec![255u8; area.width as usize * 3];
     for sy in 0..u64::from(h.height) {
         rd.read_line_rgb(&mut src)?;
         // device rows whose centre falls in this source row
-        let t0 = (sy * dev_v).div_ceil(src_v);
-        let t1 = ((sy + 1) * dev_v)
-            .div_ceil(src_v)
-            .min(u64::from(area.height));
+        let t0 = (sy * dev_v).div_ceil(src_v).max(off_y) - off_y;
+        let t1 =
+            (((sy + 1) * dev_v).div_ceil(src_v).max(off_y) - off_y).min(u64::from(area.height));
         if t0 >= t1 {
             continue;
         }
         if same_cols {
-            let n = src.len().min(dev.len());
-            dev[..n].copy_from_slice(&src[..n]);
+            let from = (off_x as usize * 3).min(src.len());
+            let n = (src.len() - from).min(dev.len());
+            dev[..n].copy_from_slice(&src[from..from + n]);
         } else {
             for tx in 0..u64::from(area.width) {
-                let sx = (tx * src_h / dev_h) as usize;
+                let sx = ((tx + off_x) * src_h / dev_h) as usize;
                 let px = src.get(sx * 3..sx * 3 + 3).unwrap_or(&[255, 255, 255]);
                 let d = tx as usize * 3;
                 dev[d..d + 3].copy_from_slice(px);
@@ -163,6 +166,29 @@ mod tests {
         let cfg = JobConfig::default();
         let p = render(&cfg, &raster(100, 100, [360, 360], |_, _| [255, 255, 255]));
         assert!(p.blank && p.raster.is_empty());
+    }
+
+    #[test]
+    fn full_media_raster_is_centred_on_the_printable_area() {
+        // CUPS rasterises the whole 108 mm media (1531 dots); the head prints the centred 1475.
+        let cfg = JobConfig::default();
+        let p = render(
+            &cfg,
+            &raster(1531, 2477, [360, 360], |x, y| {
+                black_rect(x.wrapping_sub(28), y)
+            }),
+        );
+        assert_eq!(block_extents(&p.raster), vec![(80, 94); 8]);
+        // borderless off: the printable area starts 21 rows down, so the raster is cropped by 21
+        let cfg = JobConfig::from_cups("TmBorderless=False", 1).unwrap();
+        let p = render(
+            &cfg,
+            &raster(1475, 2477, [360, 360], |x, y| {
+                black_rect(x, y.wrapping_sub(21))
+            }),
+        );
+        let q = render(&cfg, &raster(1475, 2435, [360, 360], black_rect));
+        assert_eq!(p.raster, q.raster);
     }
 
     #[test]

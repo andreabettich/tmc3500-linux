@@ -1,0 +1,339 @@
+*PPD-Adobe: "4.3"
+*% Epson TM-C3500 PPD for the tmc3500 Linux driver (rastertotmc3500).
+*% Option keywords and values are parsed by tmc3500-core::options; keep them in sync
+*% (tested by crates/rastertotmc3500/tests/ppd.rs).
+*FormatVersion: "4.3"
+*FileVersion: "0.1.0"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*PCFileName: "TMC3500.PPD"
+*Product: "(TM-C3500)"
+*Manufacturer: "Epson"
+*ModelName: "Epson TM-C3500"
+*ShortNickName: "Epson TM-C3500"
+*NickName: "Epson TM-C3500 (tmc3500)"
+*PSVersion: "(3010.000) 0"
+*LanguageLevel: "3"
+*ColorDevice: True
+*DefaultColorSpace: RGB
+*FileSystem: False
+*Throughput: "1"
+*LandscapeOrientation: Plus90
+*TTRasterizer: Type42
+*cupsVersion: 2.2
+*cupsModelNumber: 0
+*cupsManualCopies: False
+*cupsFilter2: "application/vnd.cups-raster application/vnd.cups-raw 100 rastertotmc3500"
+*DefaultResolution: 360dpi
+*HWMargins: 0 0 0 0
+*MaxMediaWidth: "306"
+*MaxMediaHeight: "3168"
+*VariablePaperSize: True
+
+*OpenUI *PageSize/Media Size: PickOne
+*OrderDependency: 10 AnySetup *PageSize
+*DefaultPageSize: Label108x174.8mm
+*PageSize Label108x174.8mm/108 x 174.8 mm Die-cut Label: "<</PageSize[306.1 495.5]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageSize
+
+*OpenUI *PageRegion/Media Size: PickOne
+*OrderDependency: 10 AnySetup *PageRegion
+*DefaultPageRegion: Label108x174.8mm
+*PageRegion Label108x174.8mm/108 x 174.8 mm Die-cut Label: "<</PageSize[306.1 495.5]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageRegion
+
+*DefaultImageableArea: Label108x174.8mm
+*ImageableArea Label108x174.8mm: "5.55 0 300.55 495.5"
+*DefaultPaperDimension: Label108x174.8mm
+*PaperDimension Label108x174.8mm: "306.1 495.5"
+
+*% Custom sizes: width 1.00-4.25 in (labels; paper forms from 1.18 in), length 0.31-44 in.
+*CustomPageSize True: "pop pop pop <</PageSize[5 -2 roll]/ImagingBBox null>>setpagedevice"
+*ParamCustomPageSize Width: 1 points 72 306
+*ParamCustomPageSize Height: 2 points 22.32 3168
+*ParamCustomPageSize WidthOffset: 3 points 0 0
+*ParamCustomPageSize HeightOffset: 4 points 0 0
+*ParamCustomPageSize Orientation: 5 int 0 0
+
+*OpenUI *Collate/Collate: Boolean
+*OrderDependency: 20 AnySetup *Collate
+*DefaultCollate: False
+*Collate True/Yes: ""
+*Collate False/No: ""
+*CloseUI: *Collate
+
+*OpenUI *TmQuality/Print Quality: PickOne
+*OrderDependency: 10 AnySetup *TmQuality
+*DefaultTmQuality: Speed
+*TmQuality Speed/Speed (360x360 dpi): "<</HWResolution[360 360]/cupsColorSpace 1/cupsColorOrder 0/cupsBitsPerColor 8/cupsCompression 0>>setpagedevice"
+*TmQuality Quality1/Quality Mode 1 (720x360 dpi): "<</HWResolution[720 360]/cupsColorSpace 1/cupsColorOrder 0/cupsBitsPerColor 8/cupsCompression 0>>setpagedevice"
+*TmQuality Quality2/Quality Mode 2 (720x360 dpi): "<</HWResolution[720 360]/cupsColorSpace 1/cupsColorOrder 0/cupsBitsPerColor 8/cupsCompression 0>>setpagedevice"
+*CloseUI: *TmQuality
+
+*OpenUI *TmMediaForm/Media Form: PickOne
+*OrderDependency: 20 AnySetup *TmMediaForm
+*DefaultTmMediaForm: DieCutGap
+*TmMediaForm DieCutGap/Die-cut Label (Gap): ""
+*TmMediaForm DieCutBlackMark/Die-cut Label (Black Mark): ""
+*TmMediaForm ContinuousLabel/Continuous Label: ""
+*TmMediaForm ContinuousPaper/Continuous Paper: ""
+*TmMediaForm ContinuousPaperBlackMark/Continuous Paper (Black Mark): ""
+*CloseUI: *TmMediaForm
+
+*OpenUI *TmCoating/Media Coating: PickOne
+*OrderDependency: 20 AnySetup *TmCoating
+*DefaultTmCoating: Matte
+*TmCoating Plain/Plain: ""
+*TmCoating Matte/Matte: ""
+*TmCoating Synthetic/Synthetic: ""
+*TmCoating Glossy/Glossy: ""
+*TmCoating Wristband/Wristband: ""
+*CloseUI: *TmCoating
+
+*OpenUI *TmMediaSaving/Media Saving (continuous forms): PickOne
+*OrderDependency: 20 AnySetup *TmMediaSaving
+*DefaultTmMediaSaving: None
+*TmMediaSaving None/Off: ""
+*TmMediaSaving Lower/Eliminate Lower Margin: ""
+*TmMediaSaving LowerUpper/Eliminate Lower and Upper Margin: ""
+*CloseUI: *TmMediaSaving
+
+*OpenUI *TmAfterPrint/After Printing: PickOne
+*OrderDependency: 20 AnySetup *TmAfterPrint
+*DefaultTmAfterPrint: CutEveryPage
+*TmAfterPrint CutEveryPage/Auto Cut every page: ""
+*TmAfterPrint CutEveryN/Auto Cut every N pages: ""
+*TmAfterPrint CutLastPage/Auto Cut after last page: ""
+*TmAfterPrint PeelOff/No Cut, feed to peel-off position: ""
+*TmAfterPrint CutPosition/No Cut, feed to cut position: ""
+*TmAfterPrint PrintEnd/No Cut, stop at print end: ""
+*CloseUI: *TmAfterPrint
+
+*OpenUI *TmCutInterval/Cut Every N Pages: PickOne
+*OrderDependency: 20 AnySetup *TmCutInterval
+*DefaultTmCutInterval: 1
+*TmCutInterval 1/1: ""
+*TmCutInterval 2/2: ""
+*TmCutInterval 3/3: ""
+*TmCutInterval 4/4: ""
+*TmCutInterval 5/5: ""
+*TmCutInterval 6/6: ""
+*TmCutInterval 7/7: ""
+*TmCutInterval 8/8: ""
+*TmCutInterval 9/9: ""
+*TmCutInterval 10/10: ""
+*TmCutInterval 12/12: ""
+*TmCutInterval 15/15: ""
+*TmCutInterval 20/20: ""
+*TmCutInterval 25/25: ""
+*TmCutInterval 50/50: ""
+*TmCutInterval 100/100: ""
+*TmCutInterval 255/255: ""
+*CloseUI: *TmCutInterval
+
+*OpenUI *TmNotify/Buzzer: PickOne
+*OrderDependency: 20 AnySetup *TmNotify
+*DefaultTmNotify: None
+*TmNotify None/Off: ""
+*TmNotify PageEnd/Beep after each page: ""
+*TmNotify JobEnd/Beep at end of job: ""
+*CloseUI: *TmNotify
+
+*OpenUI *TmBorderless/Borderless: Boolean
+*OrderDependency: 20 AnySetup *TmBorderless
+*DefaultTmBorderless: True
+*TmBorderless True/Yes: ""
+*TmBorderless False/No: ""
+*CloseUI: *TmBorderless
+
+*OpenUI *TmBandingReduction/Banding Reduction (Speed): Boolean
+*OrderDependency: 20 AnySetup *TmBandingReduction
+*DefaultTmBandingReduction: True
+*TmBandingReduction True/Yes: ""
+*TmBandingReduction False/No: ""
+*CloseUI: *TmBandingReduction
+
+*OpenUI *TmBidirectional/Bidirectional Printing: Boolean
+*OrderDependency: 20 AnySetup *TmBidirectional
+*DefaultTmBidirectional: True
+*TmBidirectional True/Yes: ""
+*TmBidirectional False/No: ""
+*CloseUI: *TmBidirectional
+
+*OpenUI *TmRotate180/Rotate 180 Degrees: Boolean
+*OrderDependency: 20 AnySetup *TmRotate180
+*DefaultTmRotate180: False
+*TmRotate180 True/Yes: ""
+*TmRotate180 False/No: ""
+*CloseUI: *TmRotate180
+
+*OpenUI *TmSkipBlank/Skip Blank Pages: Boolean
+*OrderDependency: 20 AnySetup *TmSkipBlank
+*DefaultTmSkipBlank: False
+*TmSkipBlank True/Yes: ""
+*TmSkipBlank False/No: ""
+*CloseUI: *TmSkipBlank
+
+*OpenUI *TmVacuum/Platen Vacuum: PickOne
+*OrderDependency: 20 AnySetup *TmVacuum
+*DefaultTmVacuum: Auto
+*TmVacuum Auto/Automatic: ""
+*TmVacuum 9/Manual 9 (strong): ""
+*TmVacuum 4/Manual 4: ""
+*TmVacuum 0/Manual 0 (weak): ""
+*CloseUI: *TmVacuum
+
+*OpenUI *TmPosAdjV/Print Position Vertical: PickOne
+*OrderDependency: 20 AnySetup *TmPosAdjV
+*DefaultTmPosAdjV: 0.0mm
+*TmPosAdjV -10.0mm/-10.0 mm: ""
+*TmPosAdjV -9.5mm/-9.5 mm: ""
+*TmPosAdjV -9.0mm/-9.0 mm: ""
+*TmPosAdjV -8.5mm/-8.5 mm: ""
+*TmPosAdjV -8.0mm/-8.0 mm: ""
+*TmPosAdjV -7.5mm/-7.5 mm: ""
+*TmPosAdjV -7.0mm/-7.0 mm: ""
+*TmPosAdjV -6.5mm/-6.5 mm: ""
+*TmPosAdjV -6.0mm/-6.0 mm: ""
+*TmPosAdjV -5.5mm/-5.5 mm: ""
+*TmPosAdjV -5.0mm/-5.0 mm: ""
+*TmPosAdjV -4.5mm/-4.5 mm: ""
+*TmPosAdjV -4.0mm/-4.0 mm: ""
+*TmPosAdjV -3.5mm/-3.5 mm: ""
+*TmPosAdjV -3.0mm/-3.0 mm: ""
+*TmPosAdjV -2.5mm/-2.5 mm: ""
+*TmPosAdjV -2.0mm/-2.0 mm: ""
+*TmPosAdjV -1.5mm/-1.5 mm: ""
+*TmPosAdjV -1.0mm/-1.0 mm: ""
+*TmPosAdjV -0.5mm/-0.5 mm: ""
+*TmPosAdjV 0.0mm/0.0 mm: ""
+*TmPosAdjV 0.5mm/+0.5 mm: ""
+*TmPosAdjV 1.0mm/+1.0 mm: ""
+*TmPosAdjV 1.5mm/+1.5 mm: ""
+*TmPosAdjV 2.0mm/+2.0 mm: ""
+*TmPosAdjV 2.5mm/+2.5 mm: ""
+*TmPosAdjV 3.0mm/+3.0 mm: ""
+*TmPosAdjV 3.5mm/+3.5 mm: ""
+*TmPosAdjV 4.0mm/+4.0 mm: ""
+*TmPosAdjV 4.5mm/+4.5 mm: ""
+*TmPosAdjV 5.0mm/+5.0 mm: ""
+*TmPosAdjV 5.5mm/+5.5 mm: ""
+*TmPosAdjV 6.0mm/+6.0 mm: ""
+*TmPosAdjV 6.5mm/+6.5 mm: ""
+*TmPosAdjV 7.0mm/+7.0 mm: ""
+*TmPosAdjV 7.5mm/+7.5 mm: ""
+*TmPosAdjV 8.0mm/+8.0 mm: ""
+*TmPosAdjV 8.5mm/+8.5 mm: ""
+*TmPosAdjV 9.0mm/+9.0 mm: ""
+*TmPosAdjV 9.5mm/+9.5 mm: ""
+*TmPosAdjV 10.0mm/+10.0 mm: ""
+*CloseUI: *TmPosAdjV
+
+*OpenUI *TmPosAdjH/Print Position Horizontal: PickOne
+*OrderDependency: 20 AnySetup *TmPosAdjH
+*DefaultTmPosAdjH: 0.0mm
+*TmPosAdjH -10.0mm/-10.0 mm: ""
+*TmPosAdjH -9.5mm/-9.5 mm: ""
+*TmPosAdjH -9.0mm/-9.0 mm: ""
+*TmPosAdjH -8.5mm/-8.5 mm: ""
+*TmPosAdjH -8.0mm/-8.0 mm: ""
+*TmPosAdjH -7.5mm/-7.5 mm: ""
+*TmPosAdjH -7.0mm/-7.0 mm: ""
+*TmPosAdjH -6.5mm/-6.5 mm: ""
+*TmPosAdjH -6.0mm/-6.0 mm: ""
+*TmPosAdjH -5.5mm/-5.5 mm: ""
+*TmPosAdjH -5.0mm/-5.0 mm: ""
+*TmPosAdjH -4.5mm/-4.5 mm: ""
+*TmPosAdjH -4.0mm/-4.0 mm: ""
+*TmPosAdjH -3.5mm/-3.5 mm: ""
+*TmPosAdjH -3.0mm/-3.0 mm: ""
+*TmPosAdjH -2.5mm/-2.5 mm: ""
+*TmPosAdjH -2.0mm/-2.0 mm: ""
+*TmPosAdjH -1.5mm/-1.5 mm: ""
+*TmPosAdjH -1.0mm/-1.0 mm: ""
+*TmPosAdjH -0.5mm/-0.5 mm: ""
+*TmPosAdjH 0.0mm/0.0 mm: ""
+*TmPosAdjH 0.5mm/+0.5 mm: ""
+*TmPosAdjH 1.0mm/+1.0 mm: ""
+*TmPosAdjH 1.5mm/+1.5 mm: ""
+*TmPosAdjH 2.0mm/+2.0 mm: ""
+*TmPosAdjH 2.5mm/+2.5 mm: ""
+*TmPosAdjH 3.0mm/+3.0 mm: ""
+*TmPosAdjH 3.5mm/+3.5 mm: ""
+*TmPosAdjH 4.0mm/+4.0 mm: ""
+*TmPosAdjH 4.5mm/+4.5 mm: ""
+*TmPosAdjH 5.0mm/+5.0 mm: ""
+*TmPosAdjH 5.5mm/+5.5 mm: ""
+*TmPosAdjH 6.0mm/+6.0 mm: ""
+*TmPosAdjH 6.5mm/+6.5 mm: ""
+*TmPosAdjH 7.0mm/+7.0 mm: ""
+*TmPosAdjH 7.5mm/+7.5 mm: ""
+*TmPosAdjH 8.0mm/+8.0 mm: ""
+*TmPosAdjH 8.5mm/+8.5 mm: ""
+*TmPosAdjH 9.0mm/+9.0 mm: ""
+*TmPosAdjH 9.5mm/+9.5 mm: ""
+*TmPosAdjH 10.0mm/+10.0 mm: ""
+*CloseUI: *TmPosAdjH
+
+*OpenUI *TmBlack/Black: PickOne
+*OrderDependency: 20 AnySetup *TmBlack
+*DefaultTmBlack: Rich
+*TmBlack Rich/Rich black (as Windows): ""
+*TmBlack KOnly/Black ink only: ""
+*CloseUI: *TmBlack
+
+*OpenUI *TmColorMode/Colour Correction: PickOne
+*OrderDependency: 20 AnySetup *TmColorMode
+*DefaultTmColorMode: Preferred
+*TmColorMode Preferred/Epson Preferred: ""
+*TmColorMode Standard/Epson Standard: ""
+*TmColorMode Off/Off (no colour correction): ""
+*CloseUI: *TmColorMode
+
+*OpenUI *TmGamma/Gamma: PickOne
+*OrderDependency: 20 AnySetup *TmGamma
+*DefaultTmGamma: 2.2
+*TmGamma 2.2/2.2: ""
+*TmGamma 1.8/1.8: ""
+*CloseUI: *TmGamma
+
+*OpenUI *TmInkAdjust/Ink Adjustment: Boolean
+*OrderDependency: 20 AnySetup *TmInkAdjust
+*DefaultTmInkAdjust: False
+*TmInkAdjust True/Yes: ""
+*TmInkAdjust False/No: ""
+*CloseUI: *TmInkAdjust
+
+*OpenUI *TmInkBkCMY/Ink Amount Black (CMY): PickOne
+*OrderDependency: 20 AnySetup *TmInkBkCMY
+*DefaultTmInkBkCMY: 0
+*TmInkBkCMY 0/0: ""
+*TmInkBkCMY -1/-1: ""
+*TmInkBkCMY -2/-2: ""
+*TmInkBkCMY -3/-3: ""
+*TmInkBkCMY -4/-4: ""
+*TmInkBkCMY -5/-5: ""
+*TmInkBkCMY -6/-6: ""
+*CloseUI: *TmInkBkCMY
+
+*OpenUI *TmInkBk/Ink Amount Black (K): PickOne
+*OrderDependency: 20 AnySetup *TmInkBk
+*DefaultTmInkBk: 0
+*TmInkBk 0/0: ""
+*TmInkBk -1/-1: ""
+*TmInkBk -2/-2: ""
+*TmInkBk -3/-3: ""
+*TmInkBk -4/-4: ""
+*TmInkBk -5/-5: ""
+*TmInkBk -6/-6: ""
+*CloseUI: *TmInkBk
+
+*OpenUI *TmBrightness/Brightness: PickOne
+*OrderDependency: 20 AnySetup *TmBrightness
+*DefaultTmBrightness: 0
+*TmBrightness -2/-2: ""
+*TmBrightness -1/-1: ""
+*TmBrightness 0/0: ""
+*TmBrightness 1/+1: ""
+*TmBrightness 2/+2: ""
+*CloseUI: *TmBrightness
