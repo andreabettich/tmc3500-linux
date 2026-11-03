@@ -855,6 +855,25 @@ impl PrinterStatus {
     }
 }
 
+/// Human message for a `printer-state-reasons` keyword.
+pub fn reason_message(reason: &str) -> String {
+    match reason {
+        "media-empty-error" => "The printer is out of media".into(),
+        "media-low-report" => "Media low".into(),
+        "media-jam-error" => "Media jam".into(),
+        "cover-open" => "The printer cover is open".into(),
+        "offline-report" => "The printer is offline".into(),
+        "marker-supply-low-warning" => "Ink low".into(),
+        "marker-supply-empty-error" => "Ink cartridge empty".into(),
+        "marker-supply-missing-error" => "Ink cartridge missing".into(),
+        "marker-waste-almost-full-warning" => "Maintenance box almost full".into(),
+        "marker-waste-full-error" => "Maintenance box full".into(),
+        "connecting-to-device" => "Connecting to the printer".into(),
+        "other-error" => "The printer reports an error".into(),
+        r => format!("Printer reports {r}"),
+    }
+}
+
 /// Reasons that stop printing.
 pub fn is_blocking_reason(k: &str) -> bool {
     k.ends_with("-error") || k == "cover-open" || k == "offline-report"

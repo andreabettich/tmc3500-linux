@@ -2,7 +2,7 @@
 //! lines only for changes.
 use crate::log::Log;
 use std::collections::BTreeSet;
-use tmc3500_core::status::printer::is_blocking_reason;
+use tmc3500_core::status::printer::{is_blocking_reason, reason_message};
 
 #[derive(Debug, Default)]
 pub struct StateReporter {
@@ -14,18 +14,7 @@ pub struct StateReporter {
 
 /// Human message for a newly reported reason.
 pub fn message(reason: &str) -> String {
-    match reason {
-        "media-empty-error" => "The printer is out of media".into(),
-        "media-jam-error" => "Media jam".into(),
-        "cover-open" => "The printer cover is open".into(),
-        "offline-report" => "The printer is offline".into(),
-        "marker-supply-low-warning" => "Ink low".into(),
-        "marker-supply-empty-error" => "Ink cartridge empty".into(),
-        "marker-waste-almost-full-warning" => "Maintenance box almost full".into(),
-        "marker-waste-full-error" => "Maintenance box full".into(),
-        "connecting-to-device" => "Connecting to the printer".into(),
-        r => format!("Printer reports {r}"),
-    }
+    reason_message(reason)
 }
 
 impl StateReporter {

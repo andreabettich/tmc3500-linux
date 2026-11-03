@@ -582,6 +582,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tmc3500ctl"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tmc3500-common",
+ "tmc3500-core",
+ "tmc3500-fakeprinter",
+]
+
+[[package]]
 name = "toml"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
