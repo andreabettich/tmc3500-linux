@@ -6,5 +6,6 @@ pub mod decode;
 pub mod error;
 pub mod geometry;
 pub mod options;
+pub mod protocol;
 pub mod rle;
 pub mod units;
