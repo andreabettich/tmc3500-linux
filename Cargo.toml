@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/tmc3500-core",
     "crates/tmc3500-common",
+    "crates/tmc3500-fakeprinter",
 ]
 
 [workspace.package]
